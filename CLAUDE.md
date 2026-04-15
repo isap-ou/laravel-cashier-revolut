@@ -85,14 +85,15 @@ src/
 | SetupIntent               | Save card via Checkout Widget                |
 | Checkout Session          | Revolut Checkout Widget / hosted page        |
 | Webhook (stripe/webhook)  | POST webhook → ORDER_COMPLETED etc.          |
-| Invoice                   | Not supported → UnsupportedOperationException |
-| PaymentMethod             | GET /customers/{id}/payment-methods           |
+| Invoice                   | Local generation via cashier-support           |
+| PaymentMethod (list/get/delete) | GET/DELETE /customers/{id}/payment-methods |
+| PaymentMethod (add)       | Not supported (only via checkout widget)      |
 | Refund                    | POST /orders/{id}/refund                     |
 
 ## Key differences from Stripe
 
 1. **Subscriptions** — plan-based model (plan → variation → phases) vs Stripe's price-based. No native pause/resume endpoints (`paused` state exists but no API trigger). No swap endpoint. Update limited to `external_reference` only. Unsupported operations throw `UnsupportedOperationException`.
-2. **Invoices** — Revolut does not generate invoices. Throws `UnsupportedOperationException`.
+2. **Invoices** — Revolut has no invoice API. Generated locally by cashier-support from payment/subscription data.
 3. **Checkout** — Revolut Checkout Widget (JS) instead of Stripe Checkout hosted page.
 4. **Currency** — Revolut supports 30+ currencies, amounts in minor units (cents).
 
