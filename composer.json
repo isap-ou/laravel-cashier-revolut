@@ -25,18 +25,18 @@
     },
     "autoload": {
         "psr-4": {
-            "IsApp\\CashierRevolut\\": "src/"
+            "Isapp\\CashierRevolut\\": "src/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "IsApp\\CashierRevolut\\Tests\\": "tests/"
+            "Isapp\\CashierRevolut\\Tests\\": "tests/"
         }
     },
     "extra": {
         "laravel": {
             "providers": [
-                "IsApp\\CashierRevolut\\CashierRevolutServiceProvider"
+                "Isapp\\CashierRevolut\\CashierRevolutServiceProvider"
             ]
         }
     },

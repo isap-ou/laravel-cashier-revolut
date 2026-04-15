@@ -5,7 +5,7 @@
 Concrete implementation of `isapp/laravel-cashier-support` contracts for **Revolut Merchant API**.
 Analogous to `laravel/cashier-stripe` for Stripe and `mollie/laravel-cashier-mollie` for Mollie.
 
-The user adds `use \IsApp\CashierSupport\Billable;` to the User model
+The user adds `use \Isapp\CashierSupport\Billable;` to the User model
 and works with the standard Cashier API — everything routes through Revolut.
 
 ## Revolut API
@@ -17,8 +17,10 @@ Merchant API capabilities:
 - **Orders** — create orders (analogous to Stripe PaymentIntent)
 - **Payments** — process payments on an order
 - **Customers** — create/manage customers, save payment methods
-- **Subscriptions** — manage subscriptions via saved payment methods
-- **Webhooks** — ORDER_COMPLETED, ORDER_PAYMENT_DECLINED, ORDER_PAYMENT_FAILED
+- **Subscription Plans** — plan-based model with variations and phases (trial, monthly, yearly)
+- **Subscriptions** — create, list, get, update, cancel (no native pause/resume or swap endpoints)
+- **Billing Cycles** — first-class concept with dedicated endpoints per subscription
+- **Webhooks** — ORDER_COMPLETED, ORDER_PAYMENT_DECLINED, ORDER_PAYMENT_FAILED, SUBSCRIPTION_INITIATED, SUBSCRIPTION_FINISHED, SUBSCRIPTION_CANCELLED, SUBSCRIPTION_OVERDUE
 - **Checkout Widget** — JS widget for accepting payments (analogous to Stripe Elements)
 
 Authorization: API keys from the Revolut Business dashboard.
@@ -79,7 +81,7 @@ src/
 |---------------------------|----------------------------------------------|
 | PaymentIntent             | POST /orders → POST /orders/{id}/payments    |
 | Customer                  | POST /customers                              |
-| Subscription              | Recurring charges via saved payment methods   |
+| Subscription              | Revolut Subscriptions API (plan-based)        |
 | SetupIntent               | Save card via Checkout Widget                |
 | Checkout Session          | Revolut Checkout Widget / hosted page        |
 | Webhook (stripe/webhook)  | POST webhook → ORDER_COMPLETED etc.          |
@@ -89,8 +91,7 @@ src/
 
 ## Key differences from Stripe
 
-1. **Subscriptions** — Revolut does NOT have a built-in Subscription API like Stripe.
-   We implement our own engine (like mollie/cashier-mollie): scheduled OrderItems, recurring charges via cron.
+1. **Subscriptions** — plan-based model (plan → variation → phases) vs Stripe's price-based. No native pause/resume endpoints (`paused` state exists but no API trigger). No swap — implement as cancel + create. Update limited to `external_reference` only.
 2. **Invoices** — Revolut does not generate invoices. Generated locally via dompdf/spatie-pdf.
 3. **Checkout** — Revolut Checkout Widget (JS) instead of Stripe Checkout hosted page.
 4. **Currency** — Revolut supports 30+ currencies, amounts in minor units (cents).
