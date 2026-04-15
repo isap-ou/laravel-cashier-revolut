@@ -12,3 +12,4 @@ paths:
 - Do NOT change method signatures from contracts
 - Do NOT use float for money
 - Do NOT perform synchronous long-running operations without a queue
+- Do NOT build workarounds for unsupported Revolut features — throw `UnsupportedOperationException`
