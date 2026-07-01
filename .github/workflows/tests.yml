@@ -12,8 +12,7 @@ env:
   # repository (../laravel-cashier-support), so CI checks out both repos side
   # by side. The support repo is private: add a CASHIER_SUPPORT_TOKEN secret
   # (fine-grained PAT with Contents: read on isap-ou/laravel-cashier-support).
-  # TODO: switch back to `main` once isap-ou/laravel-cashier-support PR #3 merges.
-  SUPPORT_REF: fix/query-side-hardening
+  SUPPORT_REF: main
 
 jobs:
   tests:
