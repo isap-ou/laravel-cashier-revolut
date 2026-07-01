@@ -15,6 +15,7 @@ use Isapp\CashierRevolut\Webhooks\RevolutWebhookSynchronizer;
 use Isapp\CashierSupport\DTO\WebhookPayload;
 use Isapp\CashierSupport\Enums\PaymentStatus;
 use Isapp\CashierSupport\Enums\SubscriptionStatus;
+use Isapp\CashierSupport\Events\PaymentFailed;
 use Isapp\CashierSupport\Events\PaymentSucceeded;
 use Isapp\CashierSupport\Events\SubscriptionCanceled;
 use Isapp\CashierSupport\Facades\Cashier;
@@ -33,7 +34,7 @@ class WebhookSyncTest extends TestCase
         return $this->app->make(RevolutWebhookSynchronizer::class);
     }
 
-    private function payload(string $event, string $id): WebhookPayload
+    private function payload(string $event): WebhookPayload
     {
         return $this->app->make(RevolutWebhookHandler::class)
             ->parseWebhook(json_encode(RevolutApi::webhookEvent($event)) ?: '{}', []);
@@ -53,13 +54,13 @@ class WebhookSyncTest extends TestCase
         RevolutSubscription::query()->create([
             'owner_type' => $user->getMorphClass(),
             'owner_id' => $user->getKey(),
-            'name' => 'default',
+            'type' => 'default',
             'provider' => 'revolut',
             'provider_id' => RevolutApi::SUBSCRIPTION_ID,
             'status' => SubscriptionStatus::Active,
         ]);
 
-        $this->synchronizer()->handle($this->payload('SUBSCRIPTION_CANCELLED', RevolutApi::SUBSCRIPTION_ID));
+        $this->synchronizer()->handle($this->payload('SUBSCRIPTION_CANCELLED'));
 
         $record = RevolutSubscription::query()->firstOrFail();
         $this->assertSame(SubscriptionStatus::Canceled, $record->status);
@@ -86,7 +87,7 @@ class WebhookSyncTest extends TestCase
 
         $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
 
-        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED', RevolutApi::ORDER_ID));
+        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
 
         $this->assertDatabaseHas('cashier_invoices', [
             'provider' => 'revolut',
@@ -122,7 +123,7 @@ class WebhookSyncTest extends TestCase
 
         $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
 
-        $payload = $this->payload('ORDER_COMPLETED', RevolutApi::ORDER_ID);
+        $payload = $this->payload('ORDER_COMPLETED');
         $this->synchronizer()->handle($payload);
         $this->synchronizer()->handle($payload);
 
@@ -135,8 +136,136 @@ class WebhookSyncTest extends TestCase
             '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order(['state' => 'completed'])),
         ]);
 
-        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED', RevolutApi::ORDER_ID));
+        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
 
         $this->assertDatabaseCount('cashier_invoices', 0);
+    }
+
+    public function test_a_stale_ends_at_is_cleared_when_the_subscription_is_active_again(): void
+    {
+        RevolutApi::fake([
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(RevolutApi::subscription([
+                'state' => 'active',
+            ])),
+        ]);
+
+        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+
+        RevolutSubscription::query()->create([
+            'owner_type' => $user->getMorphClass(),
+            'owner_id' => $user->getKey(),
+            'type' => 'default',
+            'provider' => 'revolut',
+            'provider_id' => RevolutApi::SUBSCRIPTION_ID,
+            'status' => SubscriptionStatus::Canceled,
+            'ends_at' => now()->subDay(),
+        ]);
+
+        $this->synchronizer()->handle($this->payload('SUBSCRIPTION_OVERDUE'));
+
+        $record = RevolutSubscription::query()->firstOrFail();
+        $this->assertSame(SubscriptionStatus::Active, $record->status);
+        // Mirror truth: an active subscription has no end — the stale ends_at
+        // must be cleared, or subscribed() stays false while Revolut bills.
+        $this->assertNull($record->ends_at);
+        $this->assertTrue($user->subscribed('default'));
+    }
+
+    public function test_a_refund_type_order_is_never_booked_as_a_payment(): void
+    {
+        Event::fake([PaymentSucceeded::class]);
+        RevolutApi::fake([
+            '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order([
+                'type' => 'refund',
+                'state' => 'completed',
+                'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+            ])),
+        ]);
+
+        User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+
+        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
+
+        $this->assertDatabaseCount('cashier_invoices', 0);
+        Event::assertNotDispatched(PaymentSucceeded::class);
+    }
+
+    public function test_a_redelivery_does_not_dispatch_payment_succeeded_twice(): void
+    {
+        Event::fake([PaymentSucceeded::class]);
+        RevolutApi::fake([
+            '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order([
+                'state' => 'completed',
+                'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+            ])),
+        ]);
+
+        User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+
+        $payload = $this->payload('ORDER_COMPLETED');
+        $this->synchronizer()->handle($payload);
+        $this->synchronizer()->handle($payload);
+
+        Event::assertDispatchedTimes(PaymentSucceeded::class, 1);
+    }
+
+    public function test_a_declined_payment_dispatches_an_explicit_failed_payment(): void
+    {
+        Event::fake([PaymentFailed::class, PaymentSucceeded::class]);
+        RevolutApi::fake([
+            // After a declined attempt the order state typically stays pending.
+            '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order([
+                'state' => 'pending',
+                'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+            ])),
+        ]);
+
+        User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+
+        $this->synchronizer()->handle($this->payload('ORDER_PAYMENT_DECLINED'));
+
+        Event::assertNotDispatched(PaymentSucceeded::class);
+        Event::assertDispatched(PaymentFailed::class, function (PaymentFailed $event): bool {
+            return $event->payment->status === PaymentStatus::Failed;
+        });
+    }
+
+    public function test_a_missing_resource_is_acknowledged_instead_of_retrying_forever(): void
+    {
+        RevolutApi::fake([
+            '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::error(404, 'Order not found'), 404),
+        ]);
+
+        // Must not throw — a deterministic 404 would loop deliveries forever.
+        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
+
+        $this->assertDatabaseCount('cashier_invoices', 0);
+    }
+
+    public function test_duplicate_subscription_delivery_does_not_redispatch_events(): void
+    {
+        Event::fake([SubscriptionCanceled::class]);
+        RevolutApi::fake([
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(RevolutApi::subscription([
+                'state' => 'cancelled',
+            ])),
+        ]);
+
+        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+
+        RevolutSubscription::query()->create([
+            'owner_type' => $user->getMorphClass(),
+            'owner_id' => $user->getKey(),
+            'type' => 'default',
+            'provider' => 'revolut',
+            'provider_id' => RevolutApi::SUBSCRIPTION_ID,
+            'status' => SubscriptionStatus::Active,
+        ]);
+
+        $payload = $this->payload('SUBSCRIPTION_CANCELLED');
+        $this->synchronizer()->handle($payload);
+        $this->synchronizer()->handle($payload);
+
+        Event::assertDispatchedTimes(SubscriptionCanceled::class, 1);
     }
 }

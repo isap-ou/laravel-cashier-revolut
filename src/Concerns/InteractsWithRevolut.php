@@ -12,6 +12,7 @@ use Isapp\CashierRevolut\Http\RevolutConnector;
 use Isapp\CashierSupport\Exceptions\CustomerNotFoundException;
 use Spatie\LaravelData\Exceptions\CannotCastDate;
 use Spatie\LaravelData\Exceptions\CannotCreateData;
+use TypeError;
 
 /**
  * Shared helpers for the Revolut gateway concerns.
@@ -50,7 +51,7 @@ trait InteractsWithRevolut
             return $callback();
         } catch (ConnectionException $exception) {
             throw RevolutApiException::connectionFailed($exception);
-        } catch (CannotCreateData|CannotCastDate $exception) {
+        } catch (CannotCreateData|CannotCastDate|TypeError $exception) {
             throw RevolutApiException::unexpectedPayload($exception);
         }
     }

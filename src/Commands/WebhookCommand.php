@@ -59,7 +59,9 @@ class WebhookCommand extends Command
         $secret = $response->json('signing_secret');
 
         if (! is_string($secret)) {
+            $webhookId = $response->json('id');
             $this->warn('Revolut did not return a signing_secret — webhook signature verification will fail until REVOLUT_WEBHOOK_SECRET is set.');
+            $this->warn('The webhook WAS registered'.(is_string($webhookId) ? " (id: {$webhookId})" : '').' — delete it before retrying to avoid duplicates.');
 
             return self::FAILURE;
         }

@@ -7,6 +7,7 @@ namespace Isapp\CashierRevolut\Concerns;
 use Illuminate\Database\Eloquent\Model;
 use InvalidArgumentException;
 use Isapp\CashierRevolut\Builders\RevolutSubscriptionBuilder;
+use Isapp\CashierRevolut\Http\Responses\CycleResponse;
 use Isapp\CashierRevolut\Http\Responses\SubscriptionResponse;
 use Isapp\CashierRevolut\Models\RevolutSubscription;
 use Isapp\CashierRevolut\RevolutGateway;
@@ -15,6 +16,7 @@ use Isapp\CashierSupport\DTO\Subscription;
 use Isapp\CashierSupport\Enums\Capability;
 use Isapp\CashierSupport\Exceptions\SubscriptionUpdateFailure;
 use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
+use Isapp\CashierSupport\Facades\Cashier;
 
 /**
  * Subscription lifecycle via the native Revolut Subscriptions API.
@@ -54,19 +56,32 @@ trait ManagesRevolutSubscriptions
             throw new SubscriptionUpdateFailure("The [{$type}] subscription has no Revolut identifier.");
         }
 
-        // Cancel returns 204 No Content per the OpenAPI spec — fetch the
-        // subscription afterwards for its actual state.
-        $subscription = $this->guardConnection(function () use ($id, $type): Subscription {
-            $this->revolut()->post("/subscriptions/{$id}/cancel");
-
-            return SubscriptionResponse::from(
+        // Revolut's cancel takes effect immediately for future billing and
+        // returns 204 — but the customer paid through the ACTIVE cycle's
+        // end_date. Grab it before cancelling (the spec does not guarantee the
+        // cycle survives cancellation) so the local record keeps a real
+        // paid-through grace period instead of ending access instantly.
+        [$subscription, $paidThrough] = $this->guardConnection(function () use ($id, $type): array {
+            $current = SubscriptionResponse::from(
                 $this->revolut()->get("/subscriptions/{$id}")->json() ?? [],
-            )->toSubscription($type);
+            );
+
+            $paidThrough = null;
+
+            if ($current->currentCycleId !== null) {
+                $paidThrough = CycleResponse::from(
+                    $this->revolut()->get("/subscriptions/{$id}/cycles/{$current->currentCycleId}")->json() ?? [],
+                )->endDate;
+            }
+
+            $subscription = $this->cancelAndRefetch($id, $type);
+
+            return [$subscription, $paidThrough];
         });
 
         $record->forceFill([
             'status' => $subscription->status,
-            'ends_at' => $subscription->endsAt ?? now(),
+            'ends_at' => $paidThrough ?? now(),
         ])->save();
 
         return $subscription;
@@ -108,14 +123,28 @@ trait ManagesRevolutSubscriptions
         throw UnsupportedOperationException::forCapability(Capability::SubscriptionSwap);
     }
 
+    /**
+     * Cancel (204 No Content) then refetch the subscription for its state.
+     */
+    private function cancelAndRefetch(string $id, string $type): Subscription
+    {
+        $this->revolut()->post("/subscriptions/{$id}/cancel");
+
+        return SubscriptionResponse::from(
+            $this->revolut()->get("/subscriptions/{$id}")->json() ?? [],
+        )->toSubscription($type);
+    }
+
     private function subscriptionRecord(Model $billable, string $type): RevolutSubscription
     {
+        $model = Cashier::subscriptionModel(RevolutGateway::DRIVER);
+
         /** @var RevolutSubscription|null $record */
-        $record = RevolutSubscription::query()
+        $record = $model::query()
             ->where('provider', RevolutGateway::DRIVER)
             ->where('owner_type', $billable->getMorphClass())
             ->where('owner_id', $billable->getKey())
-            ->where('name', $type)
+            ->where('type', $type)
             ->latest()
             ->first();
 

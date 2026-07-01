@@ -12,7 +12,8 @@ env:
   # repository (../laravel-cashier-support), so CI checks out both repos side
   # by side. The support repo is private: add a CASHIER_SUPPORT_TOKEN secret
   # (fine-grained PAT with Contents: read on isap-ou/laravel-cashier-support).
-  SUPPORT_REF: main
+  # TODO: switch back to `main` once isap-ou/laravel-cashier-support PR #3 merges.
+  SUPPORT_REF: fix/query-side-hardening
 
 jobs:
   tests:
@@ -26,6 +27,7 @@ jobs:
           - { laravel: 12, testbench: 10, php: '8.3', stability: prefer-stable }
           - { laravel: 12, testbench: 10, php: '8.4', stability: prefer-stable }
           - { laravel: 13, testbench: 11, php: '8.4', stability: prefer-stable }
+          - { laravel: 13, testbench: 11, php: '8.5', stability: prefer-stable }
 
     name: L${{ matrix.laravel }} - PHP ${{ matrix.php }} - ${{ matrix.stability }}
 

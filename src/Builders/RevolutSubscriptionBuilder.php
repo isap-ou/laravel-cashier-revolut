@@ -11,13 +11,14 @@ use Isapp\CashierRevolut\Exceptions\RevolutApiException;
 use Isapp\CashierRevolut\Http\Requests\CreateSubscriptionRequest;
 use Isapp\CashierRevolut\Http\Responses\SubscriptionResponse;
 use Isapp\CashierRevolut\Http\RevolutConnector;
-use Isapp\CashierRevolut\Models\RevolutSubscription;
 use Isapp\CashierRevolut\RevolutGateway;
 use Isapp\CashierSupport\Contracts\SubscriptionBuilder;
 use Isapp\CashierSupport\DTO\Subscription;
 use Isapp\CashierSupport\Exceptions\CustomerNotFoundException;
+use Isapp\CashierSupport\Facades\Cashier;
 use Spatie\LaravelData\Exceptions\CannotCastDate;
 use Spatie\LaravelData\Exceptions\CannotCreateData;
+use TypeError;
 
 /**
  * Builds a Revolut subscription against the native Subscriptions API.
@@ -94,7 +95,7 @@ class RevolutSubscriptionBuilder implements SubscriptionBuilder
             )->toSubscription($this->type);
         } catch (ConnectionException $exception) {
             throw RevolutApiException::connectionFailed($exception);
-        } catch (CannotCreateData|CannotCastDate $exception) {
+        } catch (CannotCreateData|CannotCastDate|TypeError $exception) {
             throw RevolutApiException::unexpectedPayload($exception);
         }
 
@@ -124,12 +125,14 @@ class RevolutSubscriptionBuilder implements SubscriptionBuilder
 
     private function persist(Subscription $subscription): void
     {
-        RevolutSubscription::query()->updateOrCreate(
+        $model = Cashier::subscriptionModel(RevolutGateway::DRIVER);
+
+        $model::query()->updateOrCreate(
             ['provider' => RevolutGateway::DRIVER, 'provider_id' => $subscription->id],
             [
                 'owner_type' => $this->billable->getMorphClass(),
                 'owner_id' => $this->billable->getKey(),
-                'name' => $this->type,
+                'type' => $this->type,
                 'status' => $subscription->status,
                 'trial_ends_at' => $subscription->trialEndsAt,
                 'ends_at' => $subscription->endsAt,

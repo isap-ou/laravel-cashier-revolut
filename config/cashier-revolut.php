@@ -50,6 +50,7 @@ return [
         'signing_secret' => env('REVOLUT_WEBHOOK_SECRET'),
         'path' => env('REVOLUT_WEBHOOK_PATH', 'webhook/revolut'),
         'tolerance' => max(0, (int) env('REVOLUT_WEBHOOK_TOLERANCE', 300)),
+        'sync_timeout' => max(1, (int) env('REVOLUT_WEBHOOK_SYNC_TIMEOUT', 5)),
         'middleware' => ['throttle:60,1'],
     ],
 

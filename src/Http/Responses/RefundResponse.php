@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Isapp\CashierRevolut\Http\Responses;
 
 use Carbon\CarbonImmutable;
+use Isapp\CashierRevolut\Exceptions\RevolutApiException;
 use Isapp\CashierSupport\DTO\Refund;
 use Isapp\CashierSupport\Enums\Currency;
 use Spatie\LaravelData\Attributes\MapInputName;
@@ -33,7 +34,9 @@ class RefundResponse extends Data
             id: $this->id,
             paymentId: $paymentId,
             amount: $this->amount,
-            currency: Currency::tryFrom(strtoupper($this->currency ?? 'EUR')) ?? Currency::EUR,
+            currency: $this->currency !== null
+                ? (Currency::tryFrom(strtoupper($this->currency)) ?? throw RevolutApiException::unsupportedCurrency($this->currency))
+                : throw RevolutApiException::unsupportedCurrency('(missing)'),
             createdAt: $this->createdAt,
         );
     }

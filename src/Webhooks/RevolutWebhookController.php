@@ -63,7 +63,7 @@ class RevolutWebhookController
         $headers = [];
 
         foreach ($request->headers->all() as $key => $values) {
-            $headers[$key] = (string) ($values[0] ?? '');
+            $headers[$key] = implode(', ', array_map('strval', $values));
         }
 
         return $headers;
