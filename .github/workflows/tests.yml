@@ -1,0 +1,104 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+
+env:
+  # This package depends on isapp/laravel-cashier-support via a composer path
+  # repository (../laravel-cashier-support), so CI checks out both repos side
+  # by side. The support repo is private: add a CASHIER_SUPPORT_TOKEN secret
+  # (fine-grained PAT with Contents: read on isap-ou/laravel-cashier-support).
+  SUPPORT_REF: main
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { laravel: 11, testbench: 9, php: '8.2', stability: prefer-stable }
+          - { laravel: 12, testbench: 10, php: '8.2', stability: prefer-lowest }
+          - { laravel: 12, testbench: 10, php: '8.3', stability: prefer-stable }
+          - { laravel: 12, testbench: 10, php: '8.4', stability: prefer-stable }
+          - { laravel: 13, testbench: 11, php: '8.4', stability: prefer-stable }
+
+    name: L${{ matrix.laravel }} - PHP ${{ matrix.php }} - ${{ matrix.stability }}
+
+    defaults:
+      run:
+        working-directory: laravel-cashier-revolut
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: laravel-cashier-revolut
+
+      - uses: actions/checkout@v4
+        with:
+          repository: isap-ou/laravel-cashier-support
+          ref: ${{ env.SUPPORT_REF }}
+          path: laravel-cashier-support
+          token: ${{ secrets.CASHIER_SUPPORT_TOKEN || github.token }}
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Constrain framework version
+        run: >
+          composer require --no-update --no-interaction
+          "illuminate/contracts:^${{ matrix.laravel }}.0"
+          "orchestra/testbench:^${{ matrix.testbench }}.0"
+
+      # Laravel 11 is past its security-support window; all 11.x releases are
+      # flagged by Composer's advisory audit. Allow the install so we can still
+      # verify compatibility. Newer, supported lines (12/13) keep the audit on.
+      - name: Allow EOL framework install
+        if: matrix.laravel == 11
+        run: composer config audit.block-insecure false
+
+      - name: Install dependencies
+        run: composer update --${{ matrix.stability }} --prefer-dist --no-interaction
+
+      - name: Run tests
+        run: composer test
+
+  quality:
+    runs-on: ubuntu-latest
+    name: static analysis & style
+
+    defaults:
+      run:
+        working-directory: laravel-cashier-revolut
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: laravel-cashier-revolut
+
+      - uses: actions/checkout@v4
+        with:
+          repository: isap-ou/laravel-cashier-support
+          ref: ${{ env.SUPPORT_REF }}
+          path: laravel-cashier-support
+          token: ${{ secrets.CASHIER_SUPPORT_TOKEN || github.token }}
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-stable --prefer-dist --no-interaction
+
+      - name: PHPStan
+        run: composer analyse
+
+      - name: Pint
+        run: vendor/bin/pint --test

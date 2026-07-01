@@ -1,28 +1,55 @@
 {
     "name": "isapp/laravel-cashier-revolut",
-    "description": "Revolut payment gateway driver for Laravel Cashier — subscriptions, charges, invoices via Revolut Merchant API",
+    "description": "Revolut payment gateway driver for Laravel Cashier — charges, subscriptions, checkout and webhooks via the Revolut Merchant API",
     "type": "library",
     "license": "MIT",
     "keywords": ["laravel", "cashier", "revolut", "billing", "subscriptions", "payments", "merchant-api"],
+    "homepage": "https://github.com/isap-ou/laravel-cashier-revolut",
+    "authors": [
+        {
+            "name": "ISAPP",
+            "homepage": "https://isapp.be"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/isap-ou/laravel-cashier-revolut/issues",
+        "source": "https://github.com/isap-ou/laravel-cashier-revolut"
+    },
     "require": {
         "php": "^8.2",
-        "ext-intl": "*",
+        "illuminate/console": "^11.0|^12.0|^13.0",
+        "illuminate/contracts": "^11.0|^12.0|^13.0",
+        "illuminate/database": "^11.0|^12.0|^13.0",
+        "illuminate/http": "^11.0|^12.0|^13.0",
+        "illuminate/routing": "^11.0|^12.0|^13.0",
+        "illuminate/support": "^11.0|^12.0|^13.0",
+        "isap-ou/laravel-enum-helpers": "^1.5",
         "isapp/laravel-cashier-support": "^1.0",
-        "illuminate/contracts": "^12.0",
-        "illuminate/database": "^12.0",
-        "illuminate/http": "^12.0",
-        "illuminate/support": "^12.0",
-        "moneyphp/money": "^4.5",
-        "nesbot/carbon": "^3.0"
+        "nesbot/carbon": "^3.0",
+        "psr/log": "^3.0",
+        "spatie/laravel-data": "^4.23",
+        "symfony/http-foundation": "^7.0|^8.0"
     },
     "require-dev": {
-        "phpunit/phpunit": "^11.0",
-        "phpstan/phpstan": "^2.0",
         "larastan/larastan": "^3.0",
         "laravel/pint": "^1.18",
-        "orchestra/testbench": "^10.0",
-        "mockery/mockery": "^1.6"
+        "mockery/mockery": "^1.6",
+        "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "phpstan/phpstan": "^2.0",
+        "phpunit/phpunit": "^11.0"
     },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../laravel-cashier-support",
+            "options": {
+                "symlink": true,
+                "versions": {
+                    "isapp/laravel-cashier-support": "1.0.0"
+                }
+            }
+        }
+    ],
     "autoload": {
         "psr-4": {
             "Isapp\\CashierRevolut\\": "src/"
@@ -42,8 +69,14 @@
     },
     "scripts": {
         "test": "vendor/bin/phpunit",
-        "analyse": "vendor/bin/phpstan analyse",
-        "format": "vendor/bin/pint"
+        "analyse": "vendor/bin/phpstan analyse --memory-limit=512M",
+        "format": "vendor/bin/pint",
+        "lint": "vendor/bin/pint --test",
+        "ci": [
+            "@test",
+            "@analyse",
+            "@lint"
+        ]
     },
     "minimum-stability": "stable",
     "prefer-stable": true,
