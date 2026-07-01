@@ -11,7 +11,7 @@ and works with the standard Cashier API — everything routes through Revolut.
 ## Revolut API
 
 Primary API: **Revolut Merchant API** (https://developer.revolut.com/docs/merchant/merchant-api)
-Version: `2025-12-04` (header `Revolut-Api-Version`)
+Version: `2026-04-20` (header `Revolut-Api-Version`)
 
 Merchant API capabilities:
 - **Orders** — create orders (analogous to Stripe PaymentIntent)
@@ -33,7 +33,7 @@ src/
 ├── CashierRevolutServiceProvider.php
 │
 ├── Http/
-│   ├── RevolutClient.php           # HTTP client for Merchant API (Laravel Http::)
+│   ├── RevolutConnector.php        # produces the configured PendingRequest (+ Http::revolut() macro)
 │   ├── Requests/                   # Request DTOs for API
 │   └── Responses/                  # Response mapping
 │
@@ -59,7 +59,6 @@ src/
 ├── Events/                         # Revolut-specific events
 │
 ├── Commands/
-│   ├── InstallCommand.php          # php artisan cashier-revolut:install
 │   └── WebhookCommand.php          # php artisan cashier-revolut:webhook
 │
 ├── config/
@@ -100,10 +99,10 @@ src/
 ## Configuration (.env)
 
 ```
-REVOLUT_API_KEY=sk_live_xxx
+REVOLUT_SECRET_KEY=sk_xxx
 REVOLUT_SANDBOX=false
-REVOLUT_WEBHOOK_SECRET=whsec_xxx
-REVOLUT_API_VERSION=2025-12-04
+REVOLUT_WEBHOOK_SECRET=wsk_xxx
+REVOLUT_API_VERSION=2026-04-20
 CASHIER_CURRENCY=eur
 CASHIER_CURRENCY_LOCALE=en_IE
 ```
