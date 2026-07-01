@@ -52,4 +52,13 @@ class RevolutApiException extends CashierException
     {
         return new self('Unexpected Revolut API response payload: '.$exception->getMessage());
     }
+
+    /**
+     * A currency this package's Currency enum does not cover. Money records
+     * must never fall back to a default currency.
+     */
+    public static function unsupportedCurrency(string $currency): self
+    {
+        return new self("Unsupported currency [{$currency}] — extend Isapp\\CashierSupport\\Enums\\Currency.");
+    }
 }

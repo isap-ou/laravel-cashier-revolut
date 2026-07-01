@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Isapp\CashierRevolut\Http\Responses;
 
 use Carbon\CarbonImmutable;
+use Isapp\CashierRevolut\Enums\RevolutSubscriptionState;
 use Isapp\CashierSupport\DTO\Subscription;
 use Isapp\CashierSupport\Enums\SubscriptionStatus;
 use Spatie\LaravelData\Attributes\MapInputName;
@@ -25,28 +26,31 @@ class SubscriptionResponse extends Data
     public function __construct(
         public string $id,
         public ?string $state = null,
+        public ?string $currentCycleId = null,
         #[WithCast(DateTimeInterfaceCast::class, format: RevolutDateFormats::FORMATS)]
         public ?CarbonImmutable $trialEndDate = null,
         #[WithCast(DateTimeInterfaceCast::class, format: RevolutDateFormats::FORMATS)]
         public ?CarbonImmutable $createdAt = null,
     ) {}
 
+    /**
+     * The subscription state as an enum; null when absent or unknown.
+     */
+    public function subscriptionState(): ?RevolutSubscriptionState
+    {
+        return $this->state !== null ? RevolutSubscriptionState::tryFrom($this->state) : null;
+    }
+
     public function status(): SubscriptionStatus
     {
-        return match ($this->state) {
-            'active' => SubscriptionStatus::Active,
-            'overdue' => SubscriptionStatus::PastDue,
-            'paused' => SubscriptionStatus::Paused,
-            'cancelled', 'finished' => SubscriptionStatus::Canceled,
-            default => SubscriptionStatus::Incomplete,
-        };
+        return $this->subscriptionState()?->toSubscriptionStatus() ?? SubscriptionStatus::Incomplete;
     }
 
     public function toSubscription(string $type): Subscription
     {
         return new Subscription(
             id: $this->id,
-            name: $type,
+            type: $type,
             status: $this->status(),
             trialEndsAt: $this->trialEndDate,
             createdAt: $this->createdAt,

@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Isapp\CashierRevolut\Http\Responses;
 
 use Carbon\CarbonImmutable;
+use Isapp\CashierRevolut\Enums\RevolutOrderState;
+use Isapp\CashierRevolut\Enums\RevolutOrderType;
+use Isapp\CashierRevolut\Exceptions\RevolutApiException;
 use Isapp\CashierSupport\DTO\Payment;
 use Isapp\CashierSupport\Enums\Currency;
 use Isapp\CashierSupport\Enums\PaymentStatus;
@@ -27,6 +30,7 @@ class OrderResponse extends Data
         public string $id,
         public int $amount,
         public string $currency,
+        public ?string $type = null,
         public ?string $token = null,
         public ?string $checkoutUrl = null,
         public ?string $state = null,
@@ -35,15 +39,45 @@ class OrderResponse extends Data
         public ?CarbonImmutable $createdAt = null,
     ) {}
 
+    /**
+     * The order type as an enum; null when the API sent an unknown value.
+     */
+    public function orderType(): ?RevolutOrderType
+    {
+        return $this->type !== null ? RevolutOrderType::tryFrom($this->type) : RevolutOrderType::Payment;
+    }
+
+    /**
+     * The order state as an enum; null when absent or unknown.
+     */
+    public function orderState(): ?RevolutOrderState
+    {
+        return $this->state !== null ? RevolutOrderState::tryFrom($this->state) : null;
+    }
+
+    /**
+     * Whether this order represents a customer payment (refunds and
+     * chargebacks are orders too — they must never be booked as payments).
+     */
+    public function isPaymentOrder(): bool
+    {
+        return $this->orderType() === RevolutOrderType::Payment;
+    }
+
+    /**
+     * The order currency as the support enum.
+     *
+     * @throws RevolutApiException When the currency is not supported.
+     */
+    public function currencyEnum(): Currency
+    {
+        return Currency::tryFrom(strtoupper($this->currency))
+            ?? throw RevolutApiException::unsupportedCurrency($this->currency);
+    }
+
     public function status(): PaymentStatus
     {
-        return match ($this->state) {
-            'completed' => PaymentStatus::Succeeded,
-            'failed' => PaymentStatus::Failed,
-            'cancelled' => PaymentStatus::Canceled,
-            'processing', 'authorised' => PaymentStatus::Processing,
-            default => PaymentStatus::Pending,
-        };
+        return $this->orderState()?->toPaymentStatus() ?? PaymentStatus::Pending;
     }
 
     public function toPayment(): Payment
@@ -51,7 +85,7 @@ class OrderResponse extends Data
         return new Payment(
             id: $this->id,
             amount: $this->amount,
-            currency: Currency::tryFrom(strtoupper($this->currency)) ?? Currency::EUR,
+            currency: $this->currencyEnum(),
             status: $this->status(),
             createdAt: $this->createdAt,
         );

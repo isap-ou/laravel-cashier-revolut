@@ -38,7 +38,12 @@ class RevolutGatewayTest extends TestCase
             '*/customers/cus_1' => Http::response(['id' => 'cus_1', 'full_name' => 'Ada', 'email' => 'ada@example.com']),
             '*/customers' => Http::response(['id' => 'cus_1', 'full_name' => 'Ada', 'email' => 'ada@example.com']),
             '*/subscriptions/*/cancel' => Http::response(null, 204),
-            '*/subscriptions/sub_1' => Http::response(['id' => 'sub_1', 'state' => 'cancelled']),
+            '*/subscriptions/sub_1/cycles/cyc_1' => Http::response([
+                'id' => 'cyc_1', 'state' => 'active', 'end_date' => '2099-08-01T00:00:00Z',
+            ]),
+            '*/subscriptions/sub_1' => Http::response([
+                'id' => 'sub_1', 'state' => 'cancelled', 'current_cycle_id' => 'cyc_1',
+            ]),
             '*/subscriptions' => Http::response(['id' => 'sub_1', 'state' => 'active']),
         ]);
     }
@@ -102,12 +107,19 @@ class RevolutGatewayTest extends TestCase
         $subscription = $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->trialDays(14)->create('pm_1');
 
         $this->assertSame('sub_1', $subscription->id);
-        $this->assertDatabaseHas('cashier_subscriptions', ['provider' => 'revolut', 'provider_id' => 'sub_1', 'name' => 'default']);
+        $this->assertDatabaseHas('cashier_subscriptions', ['provider' => 'revolut', 'provider_id' => 'sub_1', 'type' => 'default']);
 
         $canceled = $this->gateway()->cancelSubscription($user, 'default');
 
         $this->assertSame('sub_1', $canceled->id);
         Http::assertSent(fn ($request) => str_contains($request->url(), '/subscriptions/sub_1/cancel'));
+
+        // The customer paid through the active cycle's end — the local record
+        // keeps a real grace period (not ends_at = now()), so subscribed()
+        // stays true until the cycle ends.
+        $record = RevolutSubscription::query()->firstOrFail();
+        $this->assertSame('2099-08-01T00:00:00+00:00', $record->ends_at?->toIso8601String());
+        $this->assertTrue($user->subscribed('default'));
     }
 
     public function test_it_throws_for_unsupported_subscription_operations(): void

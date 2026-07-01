@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Refund-type orders are never booked as paid invoices / `PaymentSucceeded`**
+  (a Revolut refund is an order of type `refund`).
+- Webhook sync clears a stale `ends_at` when the subscription is active again
+  (previously dead code — a customer could stay locally "ended" while Revolut
+  kept billing).
+- `cancelSubscription()` records a real paid-through grace period (`ends_at` =
+  the active billing cycle's `end_date` via `current_cycle_id`, fetched before
+  cancelling) instead of ending access instantly.
+- Unknown currencies raise `RevolutApiException` instead of silently becoming
+  EUR on money records.
+- Typed events dispatch exactly once per transition: `PaymentSucceeded` only
+  when the invoice record was created; subscription events only on a status
+  change — redeliveries are safe. Declined/failed order events dispatch
+  `PaymentFailed` with an explicit `Failed` status.
+- Deterministic 404s on webhook refetch are acknowledged (no infinite retry
+  loop); webhook API calls use a short `sync_timeout` (default 5s) so slow
+  refetches don't overlap the sender's delivery window.
+- `TypeError` from schema-mismatched 2xx payloads is wrapped into
+  `RevolutApiException`; multi-instance `Revolut-Signature` headers survive
+  normalization (secret rotation); the webhook command prints the orphan
+  webhook id on partial failure.
+
+### Changed
+
+- Revolut vocabularies are enums (`RevolutOrderState`, `RevolutOrderType`,
+  `RevolutSubscriptionState`) instead of magic strings.
+- Subscription records resolve through the `Cashier::useModels()` registry
+  everywhere (no more direct model references); renamed local column usage to
+  `type` in line with cashier-support 1.1.
+- `cancelSubscriptionNow()` now honestly throws `UnsupportedOperationException`
+  (`Capability::SubscriptionCancelNow`) — Revolut has no immediate cancel.
+
 ### Added
 
 - `RevolutGateway` implementing the `isapp/laravel-cashier-support` (^1.0)
