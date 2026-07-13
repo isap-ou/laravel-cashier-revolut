@@ -32,7 +32,17 @@ class SubscriptionResponse extends Data
         public ?CarbonImmutable $trialEndDate = null,
         #[WithCast(DateTimeInterfaceCast::class, format: RevolutDateFormats::FORMATS)]
         public ?CarbonImmutable $createdAt = null,
+        public ?ScheduledActionResponse $scheduledAction = null,
     ) {}
+
+    /**
+     * The plan variation the subscription is scheduled to move to at the end of
+     * the current cycle, if any.
+     */
+    public function pendingPlanVariationId(): ?string
+    {
+        return $this->scheduledAction?->pendingPlanVariationId();
+    }
 
     /**
      * The subscription state as an enum; null when absent or unknown.
@@ -68,6 +78,10 @@ class SubscriptionResponse extends Data
             createdAt: $this->createdAt,
             currentPeriodStart: $cycle?->startDate,
             currentPeriodEnd: $cycle?->endDate,
+            pendingPrice: $this->pendingPlanVariationId(),
+            // Revolut names no date on the scheduled action: it lands at the end
+            // of the current cycle, which is the date we already hold.
+            pendingPriceStartsAt: $this->pendingPlanVariationId() !== null ? $cycle?->endDate : null,
         );
     }
 }

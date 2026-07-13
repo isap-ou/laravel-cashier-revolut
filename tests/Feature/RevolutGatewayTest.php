@@ -22,7 +22,7 @@ use Isapp\CashierSupport\Enums\Currency;
 use Isapp\CashierSupport\Enums\PaymentStatus;
 use Isapp\CashierSupport\Enums\SwapTiming;
 use Isapp\CashierSupport\Events\RefundProcessed;
-use Isapp\CashierSupport\Events\SubscriptionUpdated;
+use Isapp\CashierSupport\Events\SubscriptionPriceChangeScheduled;
 use Isapp\CashierSupport\Exceptions\PaymentFailedException;
 use Isapp\CashierSupport\Exceptions\SubscriptionUpdateFailure;
 use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
@@ -271,7 +271,7 @@ class RevolutGatewayTest extends TestCase
 
     public function test_it_schedules_a_plan_change_at_cycle_end(): void
     {
-        Event::fake([SubscriptionUpdated::class]);
+        Event::fake([SubscriptionPriceChangeScheduled::class]);
         $this->fakeSwappableSubscription();
         $user = $this->customer();
         $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->create('pm_1');
@@ -295,7 +295,9 @@ class RevolutGatewayTest extends TestCase
                 ];
         });
 
-        Event::assertDispatched(SubscriptionUpdated::class);
+        // Scheduling is not an update: nothing the customer is billed on has
+        // changed yet, and the landing (a paid renewal) is what announces it.
+        Event::assertDispatched(SubscriptionPriceChangeScheduled::class);
     }
 
     public function test_swapping_records_the_plan_revolut_reports_not_the_one_requested(): void
@@ -320,7 +322,7 @@ class RevolutGatewayTest extends TestCase
         // The 204 on change-plan IS the commit: Revolut has scheduled the move.
         // If the follow-up read then fails, throwing would tell the customer the
         // upgrade did not happen — and Revolut would bill them for it anyway.
-        Event::fake([SubscriptionUpdated::class]);
+        Event::fake([SubscriptionPriceChangeScheduled::class]);
         Http::fake([
             '*/subscriptions/*/change-plan' => Http::response(null, 204),
             '*/subscriptions/sub_1' => Http::response(['message' => 'Not found.'], 404),
@@ -334,7 +336,9 @@ class RevolutGatewayTest extends TestCase
         $subscription = $this->gateway()->swapSubscription($user, 'default', 'plan_var_2', SwapTiming::AtPeriodEnd);
 
         $this->assertSame('sub_1', $subscription->id);
-        Event::assertDispatched(SubscriptionUpdated::class);
+        // Scheduling is not an update: nothing the customer is billed on has
+        // changed yet, and the landing (a paid renewal) is what announces it.
+        Event::assertDispatched(SubscriptionPriceChangeScheduled::class);
 
         // The local record stands: still the plan the customer is paying for.
         $this->assertDatabaseHas('cashier_subscription_items', ['price' => 'plan_var_1']);

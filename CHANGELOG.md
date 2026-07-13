@@ -13,6 +13,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A scheduled plan change is now visible to the app.** Revolut reports it back on
+  the subscription as `scheduled_action`, so the driver records it as the pending
+  price (`hasPendingPriceChange()` / `pendingPrice()` / `pendingPriceStartsAt()`) and
+  dispatches the new `SubscriptionPriceChangeScheduled` — **instead of**
+  `SubscriptionUpdated`, which now fires only when the change actually lands on the
+  paid renewal.
+
+  A deferred swap used to discard its own most important output: the item row keeps
+  naming the variation the customer is still billed on (correctly), and the requested
+  one lived nowhere, so a successful swap was indistinguishable from no swap and
+  "you'll move to Pro on 1 Aug" could not be rendered.
+
+  The pending price is what **Revolut** scheduled, never what was requested — if the
+  gateway scheduled something else, the customer must be shown what they will actually
+  be moved to. A scheduled *cancellation* (the other `scheduled_action` type) is not
+  read as a price change.
+
 - **Revolut now declares what it can actually honour.** `Capability::SubscriptionSwapAtPeriodEnd`
   and `Capability::CheckoutAmount` — and, deliberately, **not** `SubscriptionSwapImmediate`
   or `CheckoutPrices`. Asking for an immediate swap (including by omitting the timing, since

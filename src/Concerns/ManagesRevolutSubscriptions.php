@@ -19,6 +19,7 @@ use Isapp\CashierSupport\Contracts\SubscriptionBuilder;
 use Isapp\CashierSupport\DTO\Subscription;
 use Isapp\CashierSupport\Enums\Capability;
 use Isapp\CashierSupport\Enums\SwapTiming;
+use Isapp\CashierSupport\Events\SubscriptionPriceChangeScheduled;
 use Isapp\CashierSupport\Events\SubscriptionUpdated;
 use Isapp\CashierSupport\Exceptions\CashierException;
 use Isapp\CashierSupport\Exceptions\SubscriptionUpdateFailure;
@@ -101,6 +102,11 @@ trait ManagesRevolutSubscriptions
         $record->forceFill([
             'status' => $subscription->status,
             'ends_at' => $endsAt,
+            // A cancelled subscription will not renew, so a change scheduled for
+            // the next cycle can never land. Advertising it would promise the
+            // customer a plan they will never be moved to.
+            'next_price' => null,
+            'next_price_starts_at' => null,
             // The cycle was fetched for the grace period anyway; recording it as
             // the period the customer paid for is free, and it is what ends_at
             // is derived from rather than a second, drifting copy.
@@ -211,29 +217,71 @@ trait ManagesRevolutSubscriptions
             // carries no local state we do not already hold — the plan change
             // is deferred, so it would still name the current variation — so
             // the local record is already correct and simply stands.
-            $subscription = $this->localSubscription($record, $type);
+            // The change IS scheduled, and the only thing we cannot do is read
+            // back which variation Revolut recorded. Announce it with what we
+            // asked for rather than staying silent about a change that will bill
+            // the customer at cycle end.
+            $subscription = $this->localSubscription($record, $type, pendingPrice: $planVariationId);
 
-            event(new SubscriptionUpdated($billable, $subscription));
+            $this->persistPendingPrice($record, $planVariationId, $record->current_period_end);
+
+            event(new SubscriptionPriceChangeScheduled($billable, $subscription));
 
             return $subscription;
         }
 
-        $subscription = $response->toSubscription($type);
+        $cycle = $this->currentCycle($id, $response->currentCycleId);
+        $subscription = $response->toSubscription($type, $record->ends_at, $cycle);
 
-        DB::transaction(function () use ($record, $response, $subscription): void {
+        // What Revolut says it scheduled, or — only when it reported no scheduled
+        // action AT ALL — what we asked for. The distinction matters: an action
+        // that IS reported and is not a plan change (a cancellation) means there
+        // is no pending plan change, and substituting the requested variation
+        // there would invent one. An absent action right after a 204 means "not
+        // reported yet", and the change is committed either way.
+        $pendingPrice = $response->pendingPlanVariationId()
+            ?? ($response->scheduledAction === null ? $planVariationId : null);
+
+        $subscription->pendingPrice = $pendingPrice;
+        $subscription->pendingPriceStartsAt = $pendingPrice !== null
+            ? ($subscription->pendingPriceStartsAt ?? $record->current_period_end)
+            : null;
+
+        DB::transaction(function () use ($record, $response, $subscription, $cycle): void {
             // Only trust a state Revolut actually named. An absent or unknown
             // state maps to Incomplete, which would corrupt a healthy record.
             if ($response->subscriptionState() !== null) {
                 $record->forceFill(['status' => $subscription->status])->save();
             }
 
+            // Only dates Revolut actually named. A cycle payload without them is
+            // "not reported", and nulling a recorded paid-through date would lose
+            // the answer to "when am I next billed?".
+            $period = array_filter([
+                'current_period_start' => $cycle?->startDate,
+                'current_period_end' => $cycle?->endDate,
+            ], static fn (mixed $value): bool => $value !== null);
+
+            if ($period !== []) {
+                $record->forceFill($period)->save();
+            }
+
             // Mirror whatever variation Revolut now reports — never the
             // requested one. The change is deferred, so until the cycle rolls
             // over Revolut still names the old variation, and so must we.
             $this->persistPlanVariation($record, $response->planVariationId);
+
+            // Revolut's own scheduled_action is the truth — if it scheduled
+            // something other than what was asked for, the customer must be shown
+            // what they will actually be moved to.
+            $this->persistPendingPrice($record, $subscription->pendingPrice, $subscription->pendingPriceStartsAt);
         });
 
-        event(new SubscriptionUpdated($billable, $subscription));
+        // Not SubscriptionUpdated: nothing the customer is billed on has changed
+        // yet. That event belongs to the moment the change lands, on the paid
+        // renewal — a listener provisioning entitlements here would grant the new
+        // plan a whole cycle early.
+        event(new SubscriptionPriceChangeScheduled($billable, $subscription));
 
         return $subscription;
     }
@@ -276,7 +324,7 @@ trait ManagesRevolutSubscriptions
     /**
      * The support DTO for what the local record already knows.
      */
-    private function localSubscription(RevolutSubscription $record, string $type): Subscription
+    private function localSubscription(RevolutSubscription $record, string $type, ?string $pendingPrice = null): Subscription
     {
         return new Subscription(
             id: (string) $record->getAttribute('provider_id'),
@@ -284,7 +332,56 @@ trait ManagesRevolutSubscriptions
             status: $record->status,
             trialEndsAt: $record->trial_ends_at,
             endsAt: $record->ends_at,
+            currentPeriodStart: $record->current_period_start,
+            currentPeriodEnd: $record->current_period_end,
+            pendingPrice: $pendingPrice,
+            pendingPriceStartsAt: $pendingPrice !== null ? $record->current_period_end : null,
         );
+    }
+
+    /**
+     * Record the plan variation the subscription will move to at cycle end.
+     *
+     * A null variation clears the pending change — what a landed (or withdrawn)
+     * one looks like, and never a reason to keep advertising a move that is no
+     * longer coming.
+     *
+     * A null date, however, is "we could not read the cycle", not "there is no
+     * date": it leaves whatever date is already recorded alone. Nulling it would
+     * turn a transient 404 on the cycle endpoint into "you'll move to Pro at some
+     * unknown time".
+     */
+    private function persistPendingPrice(RevolutSubscription $record, ?string $planVariationId, ?CarbonImmutable $startsAt): void
+    {
+        $record->forceFill([
+            'next_price' => $planVariationId,
+            ...($planVariationId === null
+                ? ['next_price_starts_at' => null]
+                : ($startsAt !== null ? ['next_price_starts_at' => $startsAt] : [])),
+        ])->save();
+    }
+
+    /**
+     * The subscription's active billing cycle, tolerating failure.
+     *
+     * The period is enrichment: the plan change is already committed by the 204,
+     * so a failed read here must not be reported as a failed swap.
+     */
+    private function currentCycle(string $subscriptionId, ?string $cycleId): ?CycleResponse
+    {
+        if ($cycleId === null || $cycleId === '') {
+            return null;
+        }
+
+        try {
+            return $this->guardConnection(
+                fn (): CycleResponse => CycleResponse::from(
+                    $this->revolut()->get("/subscriptions/{$subscriptionId}/cycles/{$cycleId}")->json() ?? [],
+                ),
+            );
+        } catch (CashierException) {
+            return null;
+        }
     }
 
     /**
