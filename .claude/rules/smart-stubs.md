@@ -37,6 +37,9 @@ When Revolut API does not natively support a feature:
 
 ## Unsupported Revolut operations → UnsupportedOperationException
 
+- `subscription.metadata` — the create body accepts five fields and metadata is not
+  one of them; no subscription endpoint returns it. Correlation lives in the single
+  `external_reference` string (RevolutSubscriptionBuilder::externalReference())
 - `subscription.pause` — state `paused` exists but no API endpoint to trigger
 - `subscription.resume` — no endpoint
 - `payment_methods.add` — no direct API, only via checkout widget flow

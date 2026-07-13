@@ -116,6 +116,38 @@ state that is not true yet.
 Every sync path writes the local item row, so `subscribedToPrice()` works for any
 subscription the driver sees — including one it did not create.
 
+**Revolut stores no metadata map on a subscription.** `POST /api/subscriptions`
+accepts five fields and `metadata` is not one of them, so `withMetadata()` throws
+`UnsupportedOperationException` rather than sending a field the API ignores — which
+is what it used to do, silently dropping the app's correlation data. Revolut's whole
+correlation surface is a single string, and the driver exposes it as such:
+
+`externalReference()` is Revolut-specific, so it is not on the `SubscriptionBuilder`
+contract and `$user->newSubscription()` (which returns the support package's guarded
+builder) does not expose it. Reach the driver's builder through the provider:
+
+```php
+use Isapp\CashierSupport\Facades\Cashier;
+
+Cashier::provider()
+    ->newSubscription($user, 'default', $planVariationId)
+    ->externalReference('order_7')
+    ->create();
+
+// And read it back:
+Cashier::provider()->subscriptionExternalReference($user, 'default'); // 'order_7'
+```
+
+`external_reference` is writable on create, returned on read, and the only field a
+subscription update accepts.
+
+`$options` on `create()` is **not** an escape hatch for arbitrary fields: it accepts
+only what the create body documents and the builder does not already set
+(`setup_order_redirect_url`, `external_reference`, `trial_duration`). Anything else
+throws — it would otherwise be merged over the typed body (overwriting `customer_id`
+or `plan_variation_id`, so the Revolut subscription and the local row would describe
+different things) or travel to the API to be ignored.
+
 **Revolut has no per-subscription quantity**, so `quantity()` throws
 `UnsupportedOperationException` and the stored quantity is always `null`
 ("not applicable"). Quantity lives on the *plan variation's* items — a `flat`
