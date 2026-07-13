@@ -211,7 +211,12 @@ class RevolutWebhookSynchronizer
 
         // The deferred change has landed: this — not the swap call that merely
         // scheduled it — is when the customer is actually on the new plan.
-        if ($response->planVariationId !== null && $response->planVariationId !== $previousPlan) {
+        //
+        // A null previous plan is not a change, it is a first sighting: the row
+        // is simply being written for the first time (a subscription created
+        // before the driver recorded item rows, or one created outside the app).
+        // Firing here would announce a plan change that never happened.
+        if ($previousPlan !== null && $response->planVariationId !== null && $response->planVariationId !== $previousPlan) {
             event(new SubscriptionUpdated(
                 $owner,
                 $response->toSubscription((string) $record->getAttribute('type')),

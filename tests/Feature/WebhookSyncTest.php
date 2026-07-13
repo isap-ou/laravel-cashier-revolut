@@ -19,6 +19,7 @@ use Isapp\CashierSupport\Enums\SubscriptionStatus;
 use Isapp\CashierSupport\Events\PaymentFailed;
 use Isapp\CashierSupport\Events\PaymentSucceeded;
 use Isapp\CashierSupport\Events\SubscriptionCanceled;
+use Isapp\CashierSupport\Events\SubscriptionUpdated;
 use Isapp\CashierSupport\Facades\Cashier;
 
 class WebhookSyncTest extends TestCase
@@ -115,9 +116,51 @@ class WebhookSyncTest extends TestCase
 
         $item = RevolutSubscriptionItem::query()->firstOrFail();
         $this->assertSame('plan_var_new', $item->price);
-        // The variation changed, the quantity did not.
-        $this->assertSame(3, $item->quantity);
+        // A stored quantity could only have come from the phantom field the
+        // driver used to send; Revolut never billed it. The sync replaces it
+        // with the truth: this gateway has no per-subscription quantity.
+        $this->assertNull($item->quantity);
         $this->assertTrue($user->subscribedToPrice('plan_var_new'));
+    }
+
+    public function test_writing_the_item_row_for_the_first_time_is_not_a_plan_change(): void
+    {
+        // Now that any sync may create the row, a subscription that never had
+        // one gets it written on first sighting. That is a backfill, not a plan
+        // change — announcing SubscriptionUpdated would be a lie.
+        Event::fake([SubscriptionUpdated::class]);
+        RevolutApi::fake([
+            '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order([
+                'state' => 'completed',
+                'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+                'subscription_data' => [
+                    'subscription_id' => RevolutApi::SUBSCRIPTION_ID,
+                    'billing_reason' => 'cycle_billing',
+                ],
+            ])),
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(RevolutApi::subscription([
+                'state' => 'active',
+                'plan_variation_id' => 'plan_var_1',
+            ])),
+        ]);
+
+        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+
+        RevolutSubscription::query()->create([
+            'owner_type' => $user->getMorphClass(),
+            'owner_id' => $user->getKey(),
+            'type' => 'default',
+            'provider' => 'revolut',
+            'provider_id' => RevolutApi::SUBSCRIPTION_ID,
+            'status' => SubscriptionStatus::Active,
+        ]);
+
+        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
+
+        // The row is written — that is the point of the change...
+        $this->assertSame('plan_var_1', RevolutSubscriptionItem::query()->firstOrFail()->price);
+        // ...but no plan changed.
+        Event::assertNotDispatched(SubscriptionUpdated::class);
     }
 
     public function test_a_paid_renewal_cycle_catches_the_local_plan_up_with_a_landed_swap(): void

@@ -334,11 +334,12 @@ class RevolutGatewayTest extends TestCase
         $this->assertDatabaseHas('cashier_subscription_items', ['price' => 'plan_var_1']);
     }
 
-    public function test_swapping_never_invents_an_item_row_for_a_subscription_that_has_none(): void
+    public function test_a_sync_writes_the_item_row_with_an_unknown_quantity(): void
     {
-        // Revolut's subscription resource carries no quantity, so a sync path
-        // cannot know it. Creating a row here would silently default a 5-seat
-        // subscription to 1 seat.
+        // Revolut has no per-subscription quantity, so `null` is the truthful
+        // value — and now a writable one. Refusing to write the row at all (the
+        // old behaviour, forced by a NOT NULL column) left subscribedToPrice()
+        // false forever for any subscription the builder did not create.
         $this->fakeSwappableSubscription();
         $user = $this->customer();
         $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->create('pm_1');
@@ -346,7 +347,58 @@ class RevolutGatewayTest extends TestCase
 
         $this->gateway()->swapSubscription($user, 'default', 'plan_var_2');
 
-        $this->assertSame(0, RevolutSubscriptionItem::query()->count());
+        $item = RevolutSubscriptionItem::query()->firstOrFail();
+        $this->assertSame('plan_var_1', $item->price);
+        $this->assertNull($item->quantity);
+        $this->assertTrue($user->subscribedToPrice('plan_var_1'));
+    }
+
+    public function test_setting_a_quantity_is_honestly_unsupported(): void
+    {
+        // Revolut's quantity lives on the plan variation's items, fixed when the
+        // plan is created — a subscription has none. The driver used to send a
+        // `quantity` field the API does not document, so an app asking for five
+        // seats was billed whatever the plan said.
+        $this->fakeRevolut();
+
+        $this->expectException(UnsupportedOperationException::class);
+        $this->customer()->newSubscription('default', 'plan_var_1')->quantity(5);
+    }
+
+    public function test_creating_a_subscription_sends_no_quantity(): void
+    {
+        $this->fakeRevolut();
+
+        $this->gateway()->newSubscription($this->customer(), 'default', 'plan_var_1')->create('pm_1');
+
+        Http::assertSent(function ($request): bool {
+            if (! str_ends_with($request->url(), '/api/subscriptions') || $request->method() !== 'POST') {
+                return false;
+            }
+
+            return ! array_key_exists('quantity', $request->data());
+        });
+    }
+
+    public function test_the_builder_itself_rejects_a_quantity(): void
+    {
+        // Reached directly through the gateway, bypassing the support-level
+        // capability gate — the driver must refuse on its own, not rely on it.
+        $this->fakeRevolut();
+
+        $this->expectException(UnsupportedOperationException::class);
+        $this->gateway()->newSubscription($this->customer(), 'default', 'plan_var_1')->quantity(5);
+    }
+
+    public function test_a_quantity_cannot_sneak_in_through_create_options(): void
+    {
+        // $options is a passthrough to the API, so it is also a back door for
+        // the phantom field. Without this guard the throw above is decoration.
+        $this->fakeRevolut();
+
+        $this->expectException(UnsupportedOperationException::class);
+        $this->gateway()->newSubscription($this->customer(), 'default', 'plan_var_1')
+            ->create('pm_1', ['quantity' => 5]);
     }
 
     public function test_swapping_to_an_empty_plan_variation_fails(): void

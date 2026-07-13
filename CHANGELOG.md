@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The driver was sending a `quantity` field Revolut does not accept.**
+  `POST /api/subscriptions` documents exactly five fields, and `quantity` is not
+  among them — a Revolut subscription has no per-customer quantity at all. It
+  lives on the *plan variation's* items (a `flat` item is a fixed amount
+  multiplied by its quantity), fixed when the plan is created. So an app calling
+  `->quantity(5)` believed it had bought five seats while Revolut billed whatever
+  the plan said.
+
+  `quantity()` now throws `UnsupportedOperationException`, the field is gone from
+  the create request, and the local item row stores `null` — "not applicable",
+  which is the truth. To sell seats, create a plan variation that prices them.
+
+  `create()`'s `$options` is a passthrough to the API, so it is also a back door
+  for the same field: `create(null, ['quantity' => 5])` now throws too. Without
+  that guard the rest is decoration.
+
+  A stored quantity on an existing item row is replaced with `null` on the next
+  sync. It could only have come from the phantom field, and Revolut never billed
+  it — keeping it would preserve a fiction the gateway never honoured.
+
+- Every sync path now writes the local `cashier_subscription_items` row, not just
+  `newSubscription()`. It previously could not: with a `NOT NULL` quantity column
+  the only options were to invent a `1` or to write nothing, so a subscription the
+  builder had not created had no item row and `subscribedToPrice()` returned
+  `false` for it forever.
+
+  Writing the row for the first time is a **backfill, not a plan change**, so it
+  does not dispatch `SubscriptionUpdated`.
+
+  **Requires `isapp/laravel-cashier-support` ^2.0** (nullable quantity +
+  `Capability::SubscriptionQuantity`). Republish and run its migrations when
+  upgrading — see that package's changelog.
+
 ### Added
 
 - `swapSubscription()` via `POST /subscriptions/{id}/change-plan`, and

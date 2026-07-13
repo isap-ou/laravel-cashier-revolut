@@ -100,10 +100,14 @@ row keeps naming the old variation indefinitely.
 scheduled, and once when it lands on the paid renewal. Distinguish them by the
 plan the subscription is actually billed on.
 
-Only `newSubscription()` creates the local item row, because only it knows the
-quantity — Revolut's subscription resource does not expose one. Subscriptions
-created before this feature shipped therefore have no item row, and
-`subscribedToPrice()` returns `false` for them; there is no backfill.
+Every sync path writes the local item row, so `subscribedToPrice()` works for any
+subscription the driver sees — including one it did not create.
+
+**Revolut has no per-subscription quantity**, so `quantity()` throws
+`UnsupportedOperationException` and the stored quantity is always `null`
+("not applicable"). Quantity lives on the *plan variation's* items — a `flat`
+item is a fixed amount multiplied by its quantity, fixed when the plan is
+created. To sell seats, create a plan variation that prices them.
 
 ```php
 use Isapp\CashierRevolut\Enums\RevolutChangePlanReason;
