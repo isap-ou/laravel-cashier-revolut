@@ -59,6 +59,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A malformed argument is no longer reported as a subscription update failure.**
+  A swap to no price at all (or to more prices than Revolut bills a subscription on),
+  a bad phase id, an unknown change reason — all now raise `InvalidArgumentException`,
+  as the reference Cashier packages do. `SubscriptionUpdateFailure` keeps its actual
+  meaning: the *subscription* could not be updated (there is none, the gateway refused).
+
+  Catching `SubscriptionUpdateFailure` around a swap used to silently swallow a bug in
+  the call itself.
+
 - **Breaking: checkout takes a `CheckoutRequest`, swap takes a `SwapTiming`.**
   `$user->checkout('plan', ['amount' => 1500])` becomes
   `$user->checkout(CheckoutRequest::forAmount(1500, Currency::EUR))`, and

@@ -43,17 +43,12 @@ trait ManagesRevolutSubscriptions
      */
     public function newSubscription(Model $billable, string $type, string|array $prices): SubscriptionBuilder
     {
-        if (is_array($prices) && count($prices) !== 1) {
-            throw new InvalidArgumentException('Revolut subscriptions accept exactly one plan variation id.');
-        }
-
-        $planVariationId = is_array($prices) ? (string) reset($prices) : $prices;
-
-        if ($planVariationId === '') {
-            throw new InvalidArgumentException('A Revolut plan variation id is required.');
-        }
-
-        return new RevolutSubscriptionBuilder($this->connector, $billable, $type, $planVariationId);
+        return new RevolutSubscriptionBuilder(
+            $this->connector,
+            $billable,
+            $type,
+            $this->planVariationId($prices),
+        );
     }
 
     /**
@@ -385,24 +380,29 @@ trait ManagesRevolutSubscriptions
     }
 
     /**
-     * The single plan variation id a swap targets.
+     * The single plan variation id a subscription runs on.
      *
-     * Both failures surface as SubscriptionUpdateFailure — the only checked
-     * exception the swap contract declares, so a caller guarding a swap with
-     * catch (SubscriptionUpdateFailure) never gets an unrelated throwable.
+     * A missing price, or more prices than Revolut bills a subscription on, is a
+     * programmer error — the caller wrote the call wrong, and no retry or fallback
+     * fixes it. It is not a SubscriptionUpdateFailure: that says the *subscription*
+     * could not be updated, and catching one around a swap must not silently
+     * swallow a bug in the call itself. The reference draws the same line —
+     * laravel/cashier: "Please provide at least one price when swapping."
      *
      * @param  string|array<int, string>  $prices
+     *
+     * @throws InvalidArgumentException When no price, or more than one, is given.
      */
     private function planVariationId(string|array $prices): string
     {
         if (is_array($prices) && count($prices) !== 1) {
-            throw new SubscriptionUpdateFailure('Revolut subscriptions accept exactly one plan variation id.');
+            throw new InvalidArgumentException('Revolut subscriptions accept exactly one plan variation id.');
         }
 
         $planVariationId = is_array($prices) ? (string) reset($prices) : $prices;
 
         if ($planVariationId === '') {
-            throw SubscriptionUpdateFailure::invalidPrice($planVariationId);
+            throw new InvalidArgumentException('A Revolut plan variation id is required.');
         }
 
         return $planVariationId;
@@ -411,7 +411,7 @@ trait ManagesRevolutSubscriptions
     /**
      * @param  array<string, mixed>  $options
      *
-     * @throws SubscriptionUpdateFailure When the phase id is not a usable string.
+     * @throws InvalidArgumentException When the phase id is not a usable string.
      */
     private function phaseId(array $options): ?string
     {
@@ -425,7 +425,7 @@ trait ManagesRevolutSubscriptions
         // customer onto the variation's first phase, at a price they did not
         // ask for.
         if (! is_string($phaseId) || $phaseId === '') {
-            throw new SubscriptionUpdateFailure('A Revolut plan variation phase id must be a non-empty string.');
+            throw new InvalidArgumentException('A Revolut plan variation phase id must be a non-empty string.');
         }
 
         return $phaseId;
@@ -434,7 +434,7 @@ trait ManagesRevolutSubscriptions
     /**
      * @param  array<string, mixed>  $options
      *
-     * @throws SubscriptionUpdateFailure When the reason is not one Revolut accepts.
+     * @throws InvalidArgumentException When the reason is not one Revolut accepts.
      */
     private function changeReason(array $options): ?RevolutChangePlanReason
     {
@@ -451,7 +451,7 @@ trait ManagesRevolutSubscriptions
         // Fail loudly: silently dropping a typo'd reason would ship a request
         // that Revolut accepts but that records nothing.
         return (is_string($reason) ? RevolutChangePlanReason::tryFrom($reason) : null)
-            ?? throw new SubscriptionUpdateFailure('Unsupported Revolut plan change reason.');
+            ?? throw new InvalidArgumentException('Unsupported Revolut plan change reason.');
     }
 
     private function subscriptionRecord(Model $billable, string $type): RevolutSubscription

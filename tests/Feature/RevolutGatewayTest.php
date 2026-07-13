@@ -7,6 +7,7 @@ namespace Isapp\CashierRevolut\Tests\Feature;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use InvalidArgumentException;
 use Isapp\CashierRevolut\Checkout\RevolutCheckoutSession;
 use Isapp\CashierRevolut\Enums\RevolutChangePlanReason;
 use Isapp\CashierRevolut\Exceptions\RevolutApiException;
@@ -411,18 +412,24 @@ class RevolutGatewayTest extends TestCase
             ->create('pm_1', ['quantity' => 5]);
     }
 
-    public function test_swapping_to_an_empty_plan_variation_fails(): void
+    public function test_swapping_to_an_empty_plan_variation_is_a_programmer_error(): void
     {
+        // Not SubscriptionUpdateFailure: that says the *subscription* could not be
+        // updated, and an app guarding a swap with catch (SubscriptionUpdateFailure)
+        // would silently swallow a bug in its own call. The reference agrees —
+        // laravel/cashier: "Please provide at least one price when swapping."
         $this->fakeSwappableSubscription();
         $user = $this->customer();
         $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->create('pm_1');
 
-        $this->expectException(SubscriptionUpdateFailure::class);
+        $this->expectException(InvalidArgumentException::class);
         $this->gateway()->swapSubscription($user, 'default', '', SwapTiming::AtPeriodEnd);
     }
 
-    public function test_swapping_without_a_local_subscription_fails(): void
+    public function test_swapping_without_a_local_subscription_is_a_cashier_exception(): void
     {
+        // The boundary's counter-case: whether a subscription exists is a fact about
+        // the world, not a bug in the call, so the app can and must catch it.
         $this->fakeSwappableSubscription();
 
         $this->expectException(SubscriptionUpdateFailure::class);
