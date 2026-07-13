@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Isapp\CashierRevolut\Http\Responses;
 
+use Isapp\CashierSupport\Enums\BillingReason;
 use Spatie\LaravelData\Attributes\MapInputName;
 use Spatie\LaravelData\Data;
 use Spatie\LaravelData\Mappers\SnakeCaseMapper;
@@ -36,5 +37,24 @@ class SubscriptionDataResponse extends Data
     public function isCycleBilling(): bool
     {
         return $this->billingReason === self::BILLING_REASON_CYCLE_BILLING;
+    }
+
+    /**
+     * The provider-agnostic reason this invoice was raised; null when Revolut
+     * did not say, or said something this driver does not know.
+     *
+     * `setup_intent` is the order that starts a subscription; `final_settlement`
+     * collects usage after it ended — still a charge the subscription drove, so
+     * it maps to the cycle reason rather than to a manual one. Anything else is
+     * left unknown rather than guessed: labelling an unrecognised reason as a
+     * renewal would put a fiction into the billing history.
+     */
+    public function toBillingReason(): ?BillingReason
+    {
+        return match ($this->billingReason) {
+            self::BILLING_REASON_CYCLE_BILLING, 'final_settlement' => BillingReason::SubscriptionCycle,
+            'setup_intent' => BillingReason::SubscriptionCreate,
+            default => null,
+        };
     }
 }

@@ -350,7 +350,9 @@ class RevolutApiContractTest extends TestCase
             'ORDER_PAYMENT_DECLINED' => ['ORDER_PAYMENT_DECLINED', WebhookEvent::PaymentFailed, RevolutApi::ORDER_ID],
             'SUBSCRIPTION_INITIATED' => ['SUBSCRIPTION_INITIATED', WebhookEvent::SubscriptionCreated, RevolutApi::SUBSCRIPTION_ID],
             'SUBSCRIPTION_CANCELLED' => ['SUBSCRIPTION_CANCELLED', WebhookEvent::SubscriptionCanceled, RevolutApi::SUBSCRIPTION_ID],
-            'SUBSCRIPTION_OVERDUE' => ['SUBSCRIPTION_OVERDUE', WebhookEvent::SubscriptionUpdated, RevolutApi::SUBSCRIPTION_ID],
+            // A failed payment is past-due, not "the subscription was updated" —
+            // that mapping was overloading SubscriptionUpdated a second time.
+            'SUBSCRIPTION_OVERDUE' => ['SUBSCRIPTION_OVERDUE', WebhookEvent::SubscriptionPastDue, RevolutApi::SUBSCRIPTION_ID],
         ];
     }
 
