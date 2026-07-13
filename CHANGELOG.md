@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A renewal now has a signal.** `SubscriptionRenewed` is dispatched when a
+  billing cycle is paid for, carrying the invoice that settled it. A plain
+  renewal previously fired no subscription event at all — Revolut sends no
+  renewal webhook, and the `SUBSCRIPTION_*` events do not fire on one — so a
+  monthly renewal produced only a payment and an orphan invoice row.
+  Reconstructed from `ORDER_COMPLETED` whose `subscription_data.billing_reason`
+  is `cycle_billing`, which is the only place a renewal is visible.
+  Announced exactly once, keyed on the invoice not yet being linked to its
+  subscription, so a redelivery does not double-extend entitlement — and a first
+  delivery that failed halfway is repaired by the redelivery rather than lost.
+- **Subscriptions record the period they are paid through.** The billing cycle
+  the driver already fetched at cancellation is no longer thrown away, and the
+  webhook sync fills it too, so `currentPeriodEnd()` answers "when am I next
+  billed?". The cycle fetch is tolerant: it is enrichment, and it must never cost
+  the status write it accompanies.
+- **Invoices say what they paid for** — `subscription_id`, the cycle's period, and
+  a `billing_reason`. The setup order is linked as well as renewals: leaving it out
+  would put a hole at the start of every billing history. An unrecognised reason is
+  recorded as unknown rather than guessed as a renewal.
+
+### Changed
+
+- `SUBSCRIPTION_OVERDUE` now maps to `WebhookEvent::SubscriptionPastDue` and
+  dispatches `SubscriptionPastDue`, not `SubscriptionUpdated`. A failed payment is
+  not "something changed" — that mapping was the second thing overloading that
+  event.
+- **Requires `isapp/laravel-cashier-support` ^2.0.**
+
 ### Fixed
 
 - **The driver was sending a `quantity` field Revolut does not accept.**

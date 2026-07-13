@@ -53,8 +53,11 @@ class SubscriptionResponse extends Data
      *                                        resource carries no such field —
      *                                        the paid-through date lives on the
      *                                        active billing cycle.
+     * @param  CycleResponse|null  $cycle  The subscription's active billing
+     *                                     cycle, fetched separately. Revolut only
+     *                                     names its id here, not its dates.
      */
-    public function toSubscription(string $type, ?CarbonImmutable $endsAt = null): Subscription
+    public function toSubscription(string $type, ?CarbonImmutable $endsAt = null, ?CycleResponse $cycle = null): Subscription
     {
         return new Subscription(
             id: $this->id,
@@ -63,6 +66,8 @@ class SubscriptionResponse extends Data
             trialEndsAt: $this->trialEndDate,
             endsAt: $endsAt,
             createdAt: $this->createdAt,
+            currentPeriodStart: $cycle?->startDate,
+            currentPeriodEnd: $cycle?->endDate,
         );
     }
 }

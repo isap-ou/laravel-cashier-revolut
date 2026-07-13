@@ -10,20 +10,27 @@ use Illuminate\Http\Client\PendingRequest;
 use Isapp\CashierRevolut\Concerns\PersistsRevolutPlanVariation;
 use Isapp\CashierRevolut\Enums\RevolutWebhookEvent;
 use Isapp\CashierRevolut\Exceptions\RevolutApiException;
+use Isapp\CashierRevolut\Http\Responses\CycleResponse;
 use Isapp\CashierRevolut\Http\Responses\OrderResponse;
+use Isapp\CashierRevolut\Http\Responses\SubscriptionDataResponse;
 use Isapp\CashierRevolut\Http\Responses\SubscriptionResponse;
 use Isapp\CashierRevolut\Http\RevolutConnector;
 use Isapp\CashierRevolut\RevolutGateway;
+use Isapp\CashierSupport\DTO\Invoice;
 use Isapp\CashierSupport\DTO\Payment;
 use Isapp\CashierSupport\DTO\WebhookPayload;
+use Isapp\CashierSupport\Enums\BillingReason;
 use Isapp\CashierSupport\Enums\PaymentStatus;
 use Isapp\CashierSupport\Enums\SubscriptionStatus;
 use Isapp\CashierSupport\Events\PaymentFailed;
 use Isapp\CashierSupport\Events\PaymentSucceeded;
 use Isapp\CashierSupport\Events\SubscriptionCanceled;
 use Isapp\CashierSupport\Events\SubscriptionCreated;
+use Isapp\CashierSupport\Events\SubscriptionPastDue;
+use Isapp\CashierSupport\Events\SubscriptionRenewed;
 use Isapp\CashierSupport\Events\SubscriptionUpdated;
 use Isapp\CashierSupport\Facades\Cashier;
+use Isapp\CashierSupport\Models\Invoice as InvoiceRecord;
 use Isapp\CashierSupport\Models\Subscription as SubscriptionRecord;
 use Psr\Log\LoggerInterface;
 use Throwable;
@@ -129,6 +136,8 @@ class RevolutWebhookSynchronizer
         $status = $response->status();
         $previousStatus = $record->status;
 
+        $cycle = $this->cycle($subscriptionId, $response->currentCycleId);
+
         $record->forceFill([
             'status' => $status,
             ...($response->trialEndDate !== null ? ['trial_ends_at' => $response->trialEndDate] : []),
@@ -137,6 +146,12 @@ class RevolutWebhookSynchronizer
             'ends_at' => $status === SubscriptionStatus::Canceled
                 ? ($record->ends_at ?? now())
                 : null,
+            // The paid-through date. Distinct from ends_at, which only says when
+            // access stops once the subscription is cancelled.
+            ...($cycle !== null ? [
+                'current_period_start' => $cycle->startDate,
+                'current_period_end' => $cycle->endDate,
+            ] : []),
         ])->save();
 
         // Keep the variation mirrored here too — a belt-and-braces resync for
@@ -158,56 +173,158 @@ class RevolutWebhookSynchronizer
         $subscription = $response->toSubscription(
             (string) $record->getAttribute('type'),
             $record->ends_at,
+            $cycle,
         );
 
         event(match ($event) {
             RevolutWebhookEvent::SubscriptionInitiated => new SubscriptionCreated($owner, $subscription),
             RevolutWebhookEvent::SubscriptionCancelled,
             RevolutWebhookEvent::SubscriptionFinished => new SubscriptionCanceled($owner, $subscription),
-            default => new SubscriptionUpdated($owner, $subscription),
+            // A failed payment is past-due, not "something changed". Mapping it
+            // onto SubscriptionUpdated was the second thing overloading that
+            // event — dunning and suspension deserve a signal of their own.
+            default => new SubscriptionPastDue($owner, $subscription),
         });
     }
 
     /**
-     * Re-mirror the plan variation a subscription is billed on, after a new
-     * cycle has been paid for — the moment a plan change scheduled
-     * at_cycle_end actually lands.
+     * A subscription's billing cycle. Revolut names it by id on the subscription
+     * and on the order, but never inlines its dates — they cost a second call.
      *
-     * Best-effort by construction: the payment it follows is already booked,
-     * so a failure here must never bubble up and cost the invoice or a webhook
-     * retry storm. A missed resync is repaired by the next renewal or by any
-     * SUBSCRIPTION_* sync.
+     * Tolerant on purpose. The period is enrichment; the status write it
+     * accompanies is not. A cancelled subscription's cycle may simply be gone
+     * (the spec does not guarantee it survives cancellation), and letting that
+     * 404 escape would abort the whole sync — and handle() acknowledges 404s, so
+     * Revolut would never redeliver and the cancellation would be lost for good.
      */
-    private function syncSubscriptionPlan(Model $owner, string $subscriptionId): void
+    private function cycle(string $subscriptionId, ?string $cycleId): ?CycleResponse
+    {
+        if ($cycleId === null || $cycleId === '') {
+            return null;
+        }
+
+        try {
+            return CycleResponse::from(
+                $this->request()->get("/subscriptions/{$subscriptionId}/cycles/{$cycleId}")->json() ?? [],
+            );
+        } catch (Throwable $exception) {
+            $this->logger->warning('Revolut billing cycle could not be fetched; the period stays as recorded', [
+                'subscription_id' => $subscriptionId,
+                'cycle_id' => $cycleId,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
+    /**
+     * The support DTO for a local invoice record.
+     *
+     * Mirrors Gateway\ManagesLocalInvoices::toInvoiceDto(), which is private to
+     * that trait. Lines are absent by design: they are not stored on the record,
+     * and the gateway builds them on demand when an invoice is retrieved.
+     */
+    private function toInvoiceDto(InvoiceRecord $invoice): Invoice
+    {
+        $providerId = $invoice->getAttribute('provider_id');
+        $number = $invoice->getAttribute('number');
+        $subscriptionId = $invoice->getAttribute('subscription_id');
+
+        return new Invoice(
+            id: is_string($providerId) && $providerId !== '' ? $providerId : (string) $invoice->getKey(),
+            amount: $invoice->amount,
+            currency: $invoice->currency,
+            status: $invoice->status,
+            number: is_string($number) ? $number : null,
+            issuedAt: $invoice->issued_at,
+            subscriptionId: is_string($subscriptionId) ? $subscriptionId : null,
+            periodStart: $invoice->period_start,
+            periodEnd: $invoice->period_end,
+            billingReason: $invoice->billing_reason,
+        );
+    }
+
+    /**
+     * Apply a paid renewal: advance the subscription's period, tie the invoice
+     * to the cycle it settled, and announce it.
+     *
+     * This is also the moment a plan change scheduled at_cycle_end lands, so the
+     * plan is re-mirrored here too.
+     *
+     * Best-effort by construction: the payment it follows is already booked, so
+     * a failure here must never bubble up and cost the invoice or trigger a
+     * webhook retry storm. A missed sync is repaired by the next renewal or by
+     * any SUBSCRIPTION_* sync.
+     *
+     * Announced exactly once, keyed on persistent state — the invoice not yet
+     * being linked to its subscription — rather than on "was this the first
+     * delivery". A first delivery that got as far as booking the payment and
+     * then failed here would otherwise lose the renewal for good: the redelivery
+     * that should repair it would see a row that already exists and stay silent.
+     */
+    private function syncRenewal(Model $owner, SubscriptionDataResponse $data, InvoiceRecord $invoice): void
     {
         $model = Cashier::subscriptionModel(RevolutGateway::DRIVER);
 
         /** @var SubscriptionRecord|null $record */
         $record = $model::query()
             ->where('provider', RevolutGateway::DRIVER)
-            ->where('provider_id', $subscriptionId)
+            ->where('provider_id', $data->subscriptionId)
             ->first();
 
         if ($record === null) {
             return;
         }
 
+        // Not yet tied to its subscription ⇒ this renewal has not been announced.
+        $announced = $invoice->getAttribute('subscription_id') !== null;
+
         try {
             $response = SubscriptionResponse::from(
-                $this->request()->get("/subscriptions/{$subscriptionId}")->json() ?? [],
+                $this->request()->get("/subscriptions/{$data->subscriptionId}")->json() ?? [],
             );
         } catch (Throwable $exception) {
-            $this->logger->warning('Revolut plan resync after a renewal failed', [
-                'subscription_id' => $subscriptionId,
+            $this->logger->warning('Revolut renewal sync failed after the payment was booked', [
+                'subscription_id' => $data->subscriptionId,
                 'exception' => $exception->getMessage(),
             ]);
 
             return;
         }
 
+        $cycle = $this->cycle($data->subscriptionId, $data->activeCycleId);
+
         $previousPlan = $this->currentPlanVariation($record);
 
+        // Only when the cycle is known: an unavailable cycle means "we could not
+        // look", not "there is no period". Nulling a recorded paid-through date
+        // would lose it.
+        if ($cycle !== null) {
+            $record->forceFill([
+                'current_period_start' => $cycle->startDate,
+                'current_period_end' => $cycle->endDate,
+            ])->save();
+        }
+
         $this->persistPlanVariation($record, $response->planVariationId);
+
+        $invoice->forceFill([
+            'subscription_id' => $record->getKey(),
+            ...($cycle !== null ? [
+                'period_start' => $cycle->startDate,
+                'period_end' => $cycle->endDate,
+            ] : []),
+        ])->save();
+
+        $type = (string) $record->getAttribute('type');
+        $subscription = $response->toSubscription($type, $record->ends_at, $cycle);
+
+        // The setup order is linked like any other, but it is not a renewal —
+        // SubscriptionCreated already announces it.
+        if (! $announced && $data->isCycleBilling()) {
+            event(new SubscriptionRenewed($owner, $subscription, $this->toInvoiceDto($invoice)));
+        }
 
         // The deferred change has landed: this — not the swap call that merely
         // scheduled it — is when the customer is actually on the new plan.
@@ -217,10 +334,7 @@ class RevolutWebhookSynchronizer
         // before the driver recorded item rows, or one created outside the app).
         // Firing here would announce a plan change that never happened.
         if ($previousPlan !== null && $response->planVariationId !== null && $response->planVariationId !== $previousPlan) {
-            event(new SubscriptionUpdated(
-                $owner,
-                $response->toSubscription((string) $record->getAttribute('type')),
-            ));
+            event(new SubscriptionUpdated($owner, $subscription));
         }
     }
 
@@ -263,6 +377,12 @@ class RevolutWebhookSynchronizer
                     'currency' => $payment->currency,
                     'status' => $payment->status,
                     'issued_at' => $payment->createdAt ?? now(),
+                    // No subscription context ⇒ a one-off charge. With one, the
+                    // reason is whatever Revolut named — or null if it named
+                    // something this driver does not recognise. Never guessed.
+                    'billing_reason' => $order->subscriptionData === null
+                        ? BillingReason::Manual
+                        : $order->subscriptionData->toBillingReason(),
                 ],
             );
 
@@ -271,14 +391,20 @@ class RevolutWebhookSynchronizer
                 event(new PaymentSucceeded($owner, $payment));
             }
 
-            // A completed cycle-billing order IS the renewal signal, and the
-            // renewal is when a scheduled plan change takes effect (Revolut
-            // fires no webhook for the change itself, and the SUBSCRIPTION_*
-            // events do not fire on a normal renewal). Strictly after the
-            // payment is booked: the plan resync costs an extra API call, and
-            // money must never be lost because that call failed.
-            if ($event === RevolutWebhookEvent::OrderCompleted && $order->subscriptionData?->isCycleBilling() === true) {
-                $this->syncSubscriptionPlan($owner, $order->subscriptionData->subscriptionId);
+            // A completed cycle-billing order IS the renewal. Revolut fires no
+            // webhook for a renewal, and the SUBSCRIPTION_* events do not fire on
+            // one — this is the only place it can be seen. It is also when a plan
+            // change scheduled at cycle end takes effect.
+            //
+            // Every subscription order is linked, not only a renewal: the very
+            // first invoice (the setup order) belongs to its subscription too,
+            // and leaving it unlinked would put a hole at the start of every
+            // billing history.
+            //
+            // Strictly after the payment is booked: everything below costs extra
+            // API calls, and money must never be lost because one of them failed.
+            if ($event === RevolutWebhookEvent::OrderCompleted && $order->subscriptionData !== null) {
+                $this->syncRenewal($owner, $order->subscriptionData, $invoice);
             }
 
             return;

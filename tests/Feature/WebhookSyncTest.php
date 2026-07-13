@@ -6,6 +6,7 @@ namespace Isapp\CashierRevolut\Tests\Feature;
 
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use Isapp\CashierRevolut\Models\RevolutInvoice;
 use Isapp\CashierRevolut\Models\RevolutSubscription;
 use Isapp\CashierRevolut\Models\RevolutSubscriptionItem;
 use Isapp\CashierRevolut\Tests\Fixtures\RevolutApi;
@@ -14,11 +15,15 @@ use Isapp\CashierRevolut\Tests\TestCase;
 use Isapp\CashierRevolut\Webhooks\RevolutWebhookHandler;
 use Isapp\CashierRevolut\Webhooks\RevolutWebhookSynchronizer;
 use Isapp\CashierSupport\DTO\WebhookPayload;
+use Isapp\CashierSupport\Enums\BillingReason;
 use Isapp\CashierSupport\Enums\PaymentStatus;
 use Isapp\CashierSupport\Enums\SubscriptionStatus;
+use Isapp\CashierSupport\Enums\WebhookEvent;
 use Isapp\CashierSupport\Events\PaymentFailed;
 use Isapp\CashierSupport\Events\PaymentSucceeded;
 use Isapp\CashierSupport\Events\SubscriptionCanceled;
+use Isapp\CashierSupport\Events\SubscriptionPastDue;
+use Isapp\CashierSupport\Events\SubscriptionRenewed;
 use Isapp\CashierSupport\Events\SubscriptionUpdated;
 use Isapp\CashierSupport\Facades\Cashier;
 
@@ -161,6 +166,220 @@ class WebhookSyncTest extends TestCase
         $this->assertSame('plan_var_1', RevolutSubscriptionItem::query()->firstOrFail()->price);
         // ...but no plan changed.
         Event::assertNotDispatched(SubscriptionUpdated::class);
+    }
+
+    public function test_a_paid_renewal_dispatches_the_subscription_renewed_event_with_its_invoice(): void
+    {
+        // The missing signal: a plain renewal produced only PaymentSucceeded and
+        // an orphan invoice row. Nothing said "this subscription renewed", and
+        // nothing tied the invoice to the cycle it settled.
+        Event::fake([SubscriptionRenewed::class, SubscriptionUpdated::class]);
+        RevolutApi::fake([
+            '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order([
+                'state' => 'completed',
+                'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+                'subscription_data' => [
+                    'subscription_id' => RevolutApi::SUBSCRIPTION_ID,
+                    'billing_reason' => 'cycle_billing',
+                    'active_cycle_id' => 'cyc-0002',
+                ],
+            ])),
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID.'/cycles/cyc-0002' => Http::response([
+                'id' => 'cyc-0002',
+                'state' => 'active',
+                'start_date' => '2026-07-01T00:00:00Z',
+                'end_date' => '2026-08-01T00:00:00Z',
+            ]),
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(RevolutApi::subscription([
+                'state' => 'active',
+                'plan_variation_id' => 'plan_var_1',
+            ])),
+        ]);
+
+        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+
+        $subscription = RevolutSubscription::query()->create([
+            'owner_type' => $user->getMorphClass(),
+            'owner_id' => $user->getKey(),
+            'type' => 'default',
+            'provider' => 'revolut',
+            'provider_id' => RevolutApi::SUBSCRIPTION_ID,
+            'status' => SubscriptionStatus::Active,
+        ]);
+
+        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
+
+        // The invoice now says which subscription and which cycle it paid for.
+        $invoice = RevolutInvoice::query()->firstOrFail();
+        $this->assertSame($subscription->getKey(), $invoice->subscription_id);
+        $this->assertSame(BillingReason::SubscriptionCycle, $invoice->billing_reason);
+        $this->assertSame('2026-08-01T00:00:00+00:00', $invoice->period_end?->toIso8601String());
+        $this->assertTrue($invoice->subscription()->first()?->is($subscription));
+
+        // The subscription's paid-through date advanced with it.
+        $this->assertSame(
+            '2026-08-01T00:00:00+00:00',
+            $subscription->fresh()?->currentPeriodEnd()?->toIso8601String(),
+        );
+
+        Event::assertDispatched(SubscriptionRenewed::class, function (SubscriptionRenewed $event) use ($user): bool {
+            return $event->billable->is($user)
+                && $event->invoice->billingReason === BillingReason::SubscriptionCycle
+                && $event->subscription->currentPeriodEnd?->toIso8601String() === '2026-08-01T00:00:00+00:00';
+        });
+
+        // A renewal is not a plan change.
+        Event::assertNotDispatched(SubscriptionUpdated::class);
+    }
+
+    public function test_a_redelivered_renewal_does_not_announce_the_renewal_twice(): void
+    {
+        // Revolut redelivers. The writes are absolute and may safely repeat, but
+        // a second SubscriptionRenewed would have a listener extend entitlement
+        // twice and send a second receipt for one payment.
+        Event::fake([SubscriptionRenewed::class, PaymentSucceeded::class]);
+        RevolutApi::fake([
+            '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order([
+                'state' => 'completed',
+                'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+                'subscription_data' => [
+                    'subscription_id' => RevolutApi::SUBSCRIPTION_ID,
+                    'billing_reason' => 'cycle_billing',
+                    'active_cycle_id' => 'cyc-0002',
+                ],
+            ])),
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(RevolutApi::subscription([
+                'state' => 'active',
+            ])),
+        ]);
+
+        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+
+        RevolutSubscription::query()->create([
+            'owner_type' => $user->getMorphClass(),
+            'owner_id' => $user->getKey(),
+            'type' => 'default',
+            'provider' => 'revolut',
+            'provider_id' => RevolutApi::SUBSCRIPTION_ID,
+            'status' => SubscriptionStatus::Active,
+        ]);
+
+        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
+        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
+
+        Event::assertDispatchedTimes(SubscriptionRenewed::class, 1);
+        Event::assertDispatchedTimes(PaymentSucceeded::class, 1);
+        $this->assertSame(1, RevolutInvoice::query()->count());
+    }
+
+    public function test_an_overdue_subscription_maps_to_past_due_not_updated(): void
+    {
+        $payload = $this->payload('SUBSCRIPTION_OVERDUE');
+
+        $this->assertSame(WebhookEvent::SubscriptionPastDue, $payload->event);
+    }
+
+    public function test_an_overdue_subscription_dispatches_past_due_not_updated(): void
+    {
+        // The payload mapping is only half the signal — the typed event is what
+        // an app listens to, and it used to be SubscriptionUpdated.
+        Event::fake([SubscriptionPastDue::class, SubscriptionUpdated::class]);
+        RevolutApi::fake([
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(RevolutApi::subscription([
+                'state' => 'overdue',
+            ])),
+        ]);
+
+        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+
+        RevolutSubscription::query()->create([
+            'owner_type' => $user->getMorphClass(),
+            'owner_id' => $user->getKey(),
+            'type' => 'default',
+            'provider' => 'revolut',
+            'provider_id' => RevolutApi::SUBSCRIPTION_ID,
+            'status' => SubscriptionStatus::Active,
+        ]);
+
+        $this->synchronizer()->handle($this->payload('SUBSCRIPTION_OVERDUE'));
+
+        Event::assertDispatched(SubscriptionPastDue::class);
+        Event::assertNotDispatched(SubscriptionUpdated::class);
+    }
+
+    public function test_a_missing_billing_cycle_never_costs_the_subscription_write(): void
+    {
+        // The cycle is enrichment; the status write is not. A cancelled
+        // subscription's cycle may simply be gone — and handle() acknowledges
+        // 404s, so letting that abort the sync would lose the cancellation for
+        // good, with no redelivery to repair it.
+        Event::fake([SubscriptionCanceled::class]);
+        RevolutApi::fake([
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID.'/cycles/*' => Http::response(['message' => 'Gone.'], 404),
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(RevolutApi::subscription([
+                'state' => 'cancelled',
+            ])),
+        ]);
+
+        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+
+        RevolutSubscription::query()->create([
+            'owner_type' => $user->getMorphClass(),
+            'owner_id' => $user->getKey(),
+            'type' => 'default',
+            'provider' => 'revolut',
+            'provider_id' => RevolutApi::SUBSCRIPTION_ID,
+            'status' => SubscriptionStatus::Active,
+            'current_period_end' => '2026-08-01T00:00:00Z',
+        ]);
+
+        $this->synchronizer()->handle($this->payload('SUBSCRIPTION_CANCELLED'));
+
+        $record = RevolutSubscription::query()->firstOrFail();
+        $this->assertSame(SubscriptionStatus::Canceled, $record->status);
+        Event::assertDispatched(SubscriptionCanceled::class);
+
+        // And the period we already knew is not erased by a failed look-up.
+        $this->assertSame('2026-08-01T00:00:00+00:00', $record->currentPeriodEnd()?->toIso8601String());
+    }
+
+    public function test_the_first_subscription_invoice_is_linked_but_is_not_a_renewal(): void
+    {
+        Event::fake([SubscriptionRenewed::class]);
+        RevolutApi::fake([
+            '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order([
+                'state' => 'completed',
+                'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+                'subscription_data' => [
+                    'subscription_id' => RevolutApi::SUBSCRIPTION_ID,
+                    'billing_reason' => 'setup_intent',
+                ],
+            ])),
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(RevolutApi::subscription([
+                'state' => 'active',
+            ])),
+        ]);
+
+        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+
+        $subscription = RevolutSubscription::query()->create([
+            'owner_type' => $user->getMorphClass(),
+            'owner_id' => $user->getKey(),
+            'type' => 'default',
+            'provider' => 'revolut',
+            'provider_id' => RevolutApi::SUBSCRIPTION_ID,
+            'status' => SubscriptionStatus::Active,
+        ]);
+
+        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
+
+        // Linked — otherwise every billing history starts with a hole.
+        $invoice = RevolutInvoice::query()->firstOrFail();
+        $this->assertSame($subscription->getKey(), $invoice->subscription_id);
+        $this->assertSame(BillingReason::SubscriptionCreate, $invoice->billing_reason);
+
+        // ...but the setup order is not a renewal.
+        Event::assertNotDispatched(SubscriptionRenewed::class);
     }
 
     public function test_a_paid_renewal_cycle_catches_the_local_plan_up_with_a_landed_swap(): void

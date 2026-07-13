@@ -71,18 +71,20 @@ trait ManagesRevolutSubscriptions
         // end_date. Grab it before cancelling (the spec does not guarantee the
         // cycle survives cancellation) so the local record keeps a real
         // paid-through grace period instead of ending access instantly.
-        [$subscription, $endsAt] = $this->guardConnection(function () use ($id, $type): array {
+        [$subscription, $endsAt, $cycle] = $this->guardConnection(function () use ($id, $type): array {
             $current = SubscriptionResponse::from(
                 $this->revolut()->get("/subscriptions/{$id}")->json() ?? [],
             );
 
-            $paidThrough = null;
+            $cycle = null;
 
             if ($current->currentCycleId !== null) {
-                $paidThrough = CycleResponse::from(
+                $cycle = CycleResponse::from(
                     $this->revolut()->get("/subscriptions/{$id}/cycles/{$current->currentCycleId}")->json() ?? [],
-                )->endDate;
+                );
             }
+
+            $paidThrough = $cycle?->endDate;
 
             $endsAt = $paidThrough ?? CarbonImmutable::now();
 
@@ -90,14 +92,25 @@ trait ManagesRevolutSubscriptions
             // gets. It is the contract's declared return type: an app that
             // renders the cancellation from it would otherwise tell the
             // customer access ended now, while they have paid through the cycle.
-            $subscription = $this->cancelAndRefetch($id, $type, $endsAt);
+            $subscription = $this->cancelAndRefetch($id, $type, $endsAt, $cycle);
 
-            return [$subscription, $endsAt];
+            return [$subscription, $endsAt, $cycle];
         });
 
         $record->forceFill([
             'status' => $subscription->status,
             'ends_at' => $endsAt,
+            // The cycle was fetched for the grace period anyway; recording it as
+            // the period the customer paid for is free, and it is what ends_at
+            // is derived from rather than a second, drifting copy.
+            //
+            // Only when it is known: a cancelled subscription's cycle may be
+            // gone, and that means "we could not look", not "there is no
+            // period" — nulling one a webhook already recorded would lose it.
+            ...($cycle !== null ? [
+                'current_period_start' => $cycle->startDate,
+                'current_period_end' => $cycle->endDate,
+            ] : []),
         ])->save();
 
         return $subscription;
@@ -216,13 +229,13 @@ trait ManagesRevolutSubscriptions
      * end date to map from — it lives on the billing cycle, fetched before the
      * cancellation.
      */
-    private function cancelAndRefetch(string $id, string $type, ?CarbonImmutable $endsAt = null): Subscription
+    private function cancelAndRefetch(string $id, string $type, ?CarbonImmutable $endsAt = null, ?CycleResponse $cycle = null): Subscription
     {
         $this->revolut()->post("/subscriptions/{$id}/cancel");
 
         return SubscriptionResponse::from(
             $this->revolut()->get("/subscriptions/{$id}")->json() ?? [],
-        )->toSubscription($type, $endsAt);
+        )->toSubscription($type, $endsAt, $cycle);
     }
 
     /**

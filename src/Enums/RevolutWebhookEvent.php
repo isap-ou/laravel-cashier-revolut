@@ -36,7 +36,9 @@ enum RevolutWebhookEvent: string
             // canceled than to a mere update in the agnostic vocabulary.
             self::SubscriptionCancelled,
             self::SubscriptionFinished => WebhookEvent::SubscriptionCanceled,
-            self::SubscriptionOverdue => WebhookEvent::SubscriptionUpdated,
+            // A failed payment is not "the subscription was updated" — that
+            // mapping was the second thing overloading SubscriptionUpdated.
+            self::SubscriptionOverdue => WebhookEvent::SubscriptionPastDue,
         };
     }
 }
