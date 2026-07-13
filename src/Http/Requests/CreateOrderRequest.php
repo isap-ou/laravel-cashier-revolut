@@ -24,5 +24,6 @@ class CreateOrderRequest extends RevolutRequest
         public ?string $redirectUrl = null,
         public ?string $description = null,
         public ?array $metadata = null,
+        public ?MerchantOrderDataRequest $merchantOrderData = null,
     ) {}
 }

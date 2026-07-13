@@ -212,6 +212,45 @@ and the hosted `url`. The token is also what `clientSecret()` returns — the
 contract's provider-neutral name for it. The session is `Responsable`, so you
 can `return` it from a controller to redirect to the hosted page.
 
+## Idempotency — retries must not charge twice
+
+The connector minted a random `Idempotency-Key` per request, which protects the
+transport (its `->retry()` re-sends the *same* request, so a transient failure keeps
+its key) and **nothing above it**. A queued job that retries after the API call
+already succeeded — a mailer timeout, a deadlock in a listener — re-enters the method
+with a brand-new key, and Revolut sees a brand-new operation: the customer is charged,
+or refunded, twice.
+
+Only the caller knows what the operation *is*, so the caller names it:
+
+```php
+$user->charge(1500, $paymentMethodId, ['idempotency_key' => "charge:{$job->uuid}"]);
+$user->refund($orderId, ['idempotency_key' => "refund:{$refundRecord->id}"]);
+
+Cashier::provider()->newSubscription($user, 'default', $planVariationId)
+    ->create(null, ['idempotency_key' => "subscribe:{$job->uuid}"]);
+```
+
+**How each one is actually made safe** — Revolut accepts the `Idempotency-Key` header
+on exactly three operations (the refund, the subscription create, and usage records),
+and on nothing else:
+
+| Operation | Mechanism |
+|---|---|
+| `refund()` | `Idempotency-Key` header — Revolut deduplicates it |
+| `newSubscription()->create()` | `Idempotency-Key` header — Revolut deduplicates it |
+| `charge()` | **Not** the header: `POST /orders` does not accept one. The order carries your key as its `merchant_order_data.reference`, and a retry looks the order up by that reference (`GET /orders?merchant_order_data_reference=`) instead of creating a second one. An order already paid is returned as-is; one left unpaid by a half-finished attempt is paid, not duplicated. |
+
+**What is still not idempotent, and cannot be:** `createCustomer()` — `POST /customers`
+accepts no key, and Revolut's customer list cannot be filtered by email, so a retry
+that lost its response creates a second customer. The local `cashier_customers` row is
+the only guard, and it is written after the call. `checkout()` likewise creates a fresh
+order per call; no money moves for an abandoned one, but the spare order is real.
+
+The default key stays random on purpose: a *deterministic* default would be worse than
+none, because Revolut allows several partial refunds of one order and would silently
+swallow the second legitimate one.
+
 ## Webhooks
 
 Register a webhook with Revolut (prints the signing secret to store in

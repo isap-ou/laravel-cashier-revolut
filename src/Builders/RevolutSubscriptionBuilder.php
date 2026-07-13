@@ -7,8 +7,10 @@ namespace Isapp\CashierRevolut\Builders;
 use DateTimeInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Arr;
 use InvalidArgumentException;
 use Isapp\CashierRevolut\Concerns\PersistsRevolutPlanVariation;
+use Isapp\CashierRevolut\Concerns\ResolvesIdempotencyKey;
 use Isapp\CashierRevolut\Exceptions\RevolutApiException;
 use Isapp\CashierRevolut\Http\Requests\CreateSubscriptionRequest;
 use Isapp\CashierRevolut\Http\Responses\SubscriptionResponse;
@@ -34,6 +36,7 @@ class RevolutSubscriptionBuilder implements SubscriptionBuilder
 {
     use ManagesCustomerRecords;
     use PersistsRevolutPlanVariation;
+    use ResolvesIdempotencyKey;
 
     private ?string $trialDuration = null;
 
@@ -158,7 +161,10 @@ class RevolutSubscriptionBuilder implements SubscriptionBuilder
      */
     public function create(?string $paymentMethod = null, array $options = []): Subscription
     {
-        $options = $this->guardedOptions($options);
+        // A header, not a body field — lift it out before the body is checked, or
+        // the whitelist would refuse the very key that makes a retry safe.
+        $key = $this->idempotencyKey($options);
+        $options = $this->guardedOptions(Arr::except($options, ['idempotency_key']));
 
         $request = new CreateSubscriptionRequest(
             customerId: $this->customerId(),
@@ -169,7 +175,7 @@ class RevolutSubscriptionBuilder implements SubscriptionBuilder
 
         try {
             $response = SubscriptionResponse::from(
-                $this->connector->request()->post('/subscriptions', array_merge($request->payload(), $options))->json() ?? [],
+                $this->connector->request($key)->post('/subscriptions', array_merge($request->payload(), $options))->json() ?? [],
             );
         } catch (ConnectionException $exception) {
             throw RevolutApiException::connectionFailed($exception);

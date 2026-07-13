@@ -22,6 +22,8 @@ use TypeError;
  */
 trait InteractsWithRevolut
 {
+    use ResolvesIdempotencyKey;
+
     protected RevolutConnector $connector;
 
     /**
@@ -29,9 +31,9 @@ trait InteractsWithRevolut
      *
      * The same connector backs the application-facing Http::revolut() macro.
      */
-    protected function revolut(): PendingRequest
+    protected function revolut(?string $idempotencyKey = null): PendingRequest
     {
-        return $this->connector->request();
+        return $this->connector->request($idempotencyKey);
     }
 
     /**

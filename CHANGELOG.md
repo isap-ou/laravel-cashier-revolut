@@ -114,6 +114,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A caller-level retry no longer charges or refunds twice.** The connector minted a
+  fresh `Idempotency-Key` per API call, which protects the transport — `->retry()`
+  re-sends the same request, so a transient failure keeps its key — and nothing above
+  it. A queued job that retried after the call had already succeeded (a mailer timeout,
+  a deadlock in a listener) arrived with a brand-new key, and Revolut saw a brand-new
+  operation: real money, moved twice, silently.
+
+  `charge()`, `refund()` and the subscription builder's `create()` now accept
+  `options['idempotency_key']`, because only the caller knows what the *operation* is.
+
+  How each is made safe differs, because the API differs: Revolut accepts the
+  `Idempotency-Key` header on the refund, the subscription create and usage records —
+  **and on nothing else**. `POST /orders` and `POST /orders/{id}/payments` accept none,
+  so keying them would have been a no-op dressed up as a guarantee. Instead a charge
+  writes the key as the order's own `merchant_order_data.reference` and a retry finds
+  that order (`GET /orders?merchant_order_data_reference=`) rather than creating a
+  second one: an order already paid is returned as it stands, and one left unpaid by a
+  half-finished attempt is paid rather than duplicated.
+
+  Still not idempotent, and documented as such: `createCustomer()` (no key, and the
+  customer list cannot be filtered by email) and `checkout()` (a spare unpaid order, but
+  no money moves). The default key stays random: a deterministic one would silently
+  swallow the second of two legitimate partial refunds, which Revolut explicitly allows.
+
 - **An app-initiated cancellation now fires `SubscriptionCanceled`.** It fired nothing at
   all: `cancelSubscription()` wrote the status itself, and the `SUBSCRIPTION_CANCELLED`
   webhook that followed found the status already `Canceled` and short-circuited on its
