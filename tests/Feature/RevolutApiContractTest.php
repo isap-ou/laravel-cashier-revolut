@@ -201,6 +201,45 @@ class RevolutApiContractTest extends TestCase
         $this->assertSame(SubscriptionStatus::Canceled, $subscription->status);
     }
 
+    public function test_changing_a_plan_sends_the_documented_body_and_consumes_the_204(): void
+    {
+        // POST /api/subscriptions/{id}/change-plan returns 204 No Content, so
+        // the driver refetches for state. `scheduled` is a required enum whose
+        // only accepted value is at_cycle_end, and `reason` is an enum, not
+        // free text.
+        // https://developer.revolut.com/docs/api/merchant/operations/change-subscription-plan
+        RevolutApi::fake([
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID.'/change-plan' => Http::response(null, 204),
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(RevolutApi::subscription([
+                'state' => 'active',
+            ])),
+        ]);
+
+        $user = $this->customer();
+        $this->gateway()->newSubscription($user, 'default', '850e8400-e29b-41d4-a716-446655440003')->create();
+
+        $subscription = $this->gateway()->swapSubscription($user, 'default', '950e8400-e29b-41d4-a716-446655440004', [
+            'plan_variation_phase_id' => 'a60e8400-e29b-41d4-a716-446655440006',
+            'reason' => 'merchant_request',
+        ]);
+
+        $this->assertSame(RevolutApi::SUBSCRIPTION_ID, $subscription->id);
+        $this->assertSame(SubscriptionStatus::Active, $subscription->status);
+
+        Http::assertSent(function ($request): bool {
+            if (! str_contains($request->url(), '/change-plan')) {
+                return false;
+            }
+
+            return $request->data() === [
+                'plan_variation_id' => '950e8400-e29b-41d4-a716-446655440004',
+                'plan_variation_phase_id' => 'a60e8400-e29b-41d4-a716-446655440006',
+                'scheduled' => 'at_cycle_end',
+                'reason' => 'merchant_request',
+            ];
+        });
+    }
+
     public function test_the_documented_payment_methods_payload_maps_to_payment_method_dtos(): void
     {
         RevolutApi::fake();

@@ -35,6 +35,7 @@ class OrderResponse extends Data
         public ?string $checkoutUrl = null,
         public ?string $state = null,
         public ?string $customerId = null,
+        public ?SubscriptionDataResponse $subscriptionData = null,
         #[WithCast(DateTimeInterfaceCast::class, format: RevolutDateFormats::FORMATS)]
         public ?CarbonImmutable $createdAt = null,
     ) {}

@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `swapSubscription()` via `POST /subscriptions/{id}/change-plan`, and
+  `Capability::SubscriptionSwap` in `RevolutGateway::capabilities()`. Revolut
+  does support plan changes — just not through the update endpoint (which only
+  covers `external_reference`), which is why they were previously believed
+  impossible. The change is **scheduled at cycle end**, not immediate: the
+  customer finishes the current cycle on the old variation, nothing is
+  prorated, and a trial on the target variation is skipped. `$options` accepts
+  `plan_variation_phase_id` and a `reason` (`RevolutChangePlanReason`).
+  Dispatches `SubscriptionUpdated`.
+- The plan variation a subscription is billed on is now persisted as its local
+  `cashier_subscription_items` row, so `subscribedToPrice()` and
+  `onTrial($type, $price)` work for Revolut — previously no item row was ever
+  written and both could only return false. **This applies to subscriptions
+  created from this version on.** Only `newSubscription()` creates the item row,
+  because only it is told the quantity: the Revolut subscription resource does
+  not expose one, so no sync path may insert a row and silently default a
+  five-seat subscription to one seat. Subscriptions created before this version
+  therefore have no item row, and there is no backfill.
+- `SubscriptionUpdated` is also dispatched when a scheduled plan change actually
+  lands (detected on the paid renewal), not only when it is scheduled.
+
+### Fixed
+
+- The local plan variation now catches up when a scheduled swap actually lands.
+  Revolut fires no webhook for a plan change, and the `SUBSCRIPTION_*` events do
+  not fire on a normal renewal — so the driver now re-mirrors the variation when
+  the renewal order completes (`ORDER_COMPLETED` whose
+  `subscription_data.billing_reason` is `cycle_billing`), as well as on any
+  subscription sync. `OrderResponse` maps `subscription_data` for this.
+
+### Changed
+
+- Subscription pause/resume remain unsupported, but swap no longer throws
+  `UnsupportedOperationException`.
+
 ## [1.0.0] - 2026-07-02
 
 ### Added

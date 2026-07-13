@@ -5,15 +5,19 @@ declare(strict_types=1);
 namespace Isapp\CashierRevolut\Tests\Feature;
 
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Isapp\CashierRevolut\Checkout\RevolutCheckoutSession;
+use Isapp\CashierRevolut\Enums\RevolutChangePlanReason;
 use Isapp\CashierRevolut\Exceptions\RevolutApiException;
 use Isapp\CashierRevolut\Models\RevolutSubscription;
+use Isapp\CashierRevolut\Models\RevolutSubscriptionItem;
 use Isapp\CashierRevolut\Tests\Fixtures\User;
 use Isapp\CashierRevolut\Tests\TestCase;
 use Isapp\CashierSupport\Contracts\GatewayProvider;
 use Isapp\CashierSupport\Enums\Capability;
 use Isapp\CashierSupport\Enums\PaymentStatus;
+use Isapp\CashierSupport\Events\SubscriptionUpdated;
 use Isapp\CashierSupport\Exceptions\SubscriptionUpdateFailure;
 use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
 use Isapp\CashierSupport\Facades\Cashier;
@@ -59,6 +63,7 @@ class RevolutGatewayTest extends TestCase
 
         $this->assertTrue($gateway->supports(Capability::Charges));
         $this->assertTrue($gateway->supports(Capability::Subscriptions));
+        $this->assertTrue($gateway->supports(Capability::SubscriptionSwap));
         $this->assertTrue($gateway->supports(Capability::PaymentMethodsList));
         $this->assertFalse($gateway->supports(Capability::SubscriptionPause));
         $this->assertFalse($gateway->supports(Capability::PaymentMethodsAdd));
@@ -137,9 +142,124 @@ class RevolutGatewayTest extends TestCase
         $this->gateway()->cancelSubscriptionNow($this->customer(), 'default');
     }
 
-    public function test_it_throws_when_swapping(): void
+    /**
+     * Fake a subscription that Revolut still reports on plan_var_1 — which is
+     * what it does until a scheduled change actually lands at cycle end.
+     */
+    private function fakeSwappableSubscription(string $reportedPlanVariation = 'plan_var_1'): void
     {
-        $this->expectException(UnsupportedOperationException::class);
+        Http::fake([
+            '*/subscriptions/*/change-plan' => Http::response(null, 204),
+            '*/subscriptions/sub_1' => Http::response([
+                'id' => 'sub_1', 'state' => 'active', 'plan_variation_id' => $reportedPlanVariation,
+            ]),
+            '*/subscriptions' => Http::response([
+                'id' => 'sub_1', 'state' => 'active', 'plan_variation_id' => 'plan_var_1',
+            ]),
+        ]);
+    }
+
+    public function test_it_schedules_a_plan_change_at_cycle_end(): void
+    {
+        Event::fake([SubscriptionUpdated::class]);
+        $this->fakeSwappableSubscription();
+        $user = $this->customer();
+        $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->create('pm_1');
+
+        $subscription = $this->gateway()->swapSubscription($user, 'default', 'plan_var_2', [
+            'reason' => RevolutChangePlanReason::CustomerRequest,
+        ]);
+
+        $this->assertSame('sub_1', $subscription->id);
+
+        Http::assertSent(function ($request): bool {
+            if (! str_contains($request->url(), '/subscriptions/sub_1/change-plan')) {
+                return false;
+            }
+
+            return $request->method() === 'POST'
+                && $request->data() === [
+                    'plan_variation_id' => 'plan_var_2',
+                    'scheduled' => 'at_cycle_end',
+                    'reason' => 'customer_request',
+                ];
+        });
+
+        Event::assertDispatched(SubscriptionUpdated::class);
+    }
+
+    public function test_swapping_records_the_plan_revolut_reports_not_the_one_requested(): void
+    {
+        // The change only takes effect at the end of the current cycle, so the
+        // customer is still on — and still paying for — plan_var_1. Writing
+        // plan_var_2 locally right away would lie until the cycle rolls over.
+        $this->fakeSwappableSubscription(reportedPlanVariation: 'plan_var_1');
+        $user = $this->customer();
+        $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->create('pm_1');
+
+        $this->gateway()->swapSubscription($user, 'default', 'plan_var_2');
+
+        $this->assertDatabaseHas('cashier_subscription_items', ['price' => 'plan_var_1']);
+        $this->assertDatabaseMissing('cashier_subscription_items', ['price' => 'plan_var_2']);
+        $this->assertTrue($user->subscribedToPrice('plan_var_1'));
+        $this->assertFalse($user->subscribedToPrice('plan_var_2'));
+    }
+
+    public function test_a_failed_refetch_does_not_report_a_scheduled_swap_as_failed(): void
+    {
+        // The 204 on change-plan IS the commit: Revolut has scheduled the move.
+        // If the follow-up read then fails, throwing would tell the customer the
+        // upgrade did not happen — and Revolut would bill them for it anyway.
+        Event::fake([SubscriptionUpdated::class]);
+        Http::fake([
+            '*/subscriptions/*/change-plan' => Http::response(null, 204),
+            '*/subscriptions/sub_1' => Http::response(['message' => 'Not found.'], 404),
+            '*/subscriptions' => Http::response([
+                'id' => 'sub_1', 'state' => 'active', 'plan_variation_id' => 'plan_var_1',
+            ]),
+        ]);
+        $user = $this->customer();
+        $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->create('pm_1');
+
+        $subscription = $this->gateway()->swapSubscription($user, 'default', 'plan_var_2');
+
+        $this->assertSame('sub_1', $subscription->id);
+        Event::assertDispatched(SubscriptionUpdated::class);
+
+        // The local record stands: still the plan the customer is paying for.
+        $this->assertDatabaseHas('cashier_subscription_items', ['price' => 'plan_var_1']);
+    }
+
+    public function test_swapping_never_invents_an_item_row_for_a_subscription_that_has_none(): void
+    {
+        // Revolut's subscription resource carries no quantity, so a sync path
+        // cannot know it. Creating a row here would silently default a 5-seat
+        // subscription to 1 seat.
+        $this->fakeSwappableSubscription();
+        $user = $this->customer();
+        $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->create('pm_1');
+        RevolutSubscriptionItem::query()->delete();
+
+        $this->gateway()->swapSubscription($user, 'default', 'plan_var_2');
+
+        $this->assertSame(0, RevolutSubscriptionItem::query()->count());
+    }
+
+    public function test_swapping_to_an_empty_plan_variation_fails(): void
+    {
+        $this->fakeSwappableSubscription();
+        $user = $this->customer();
+        $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->create('pm_1');
+
+        $this->expectException(SubscriptionUpdateFailure::class);
+        $this->gateway()->swapSubscription($user, 'default', '');
+    }
+
+    public function test_swapping_without_a_local_subscription_fails(): void
+    {
+        $this->fakeSwappableSubscription();
+
+        $this->expectException(SubscriptionUpdateFailure::class);
         $this->gateway()->swapSubscription($this->customer(), 'default', 'plan_var_2');
     }
 

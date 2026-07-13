@@ -63,9 +63,10 @@ class RevolutGateway implements GatewayProvider
     /**
      * The capabilities Revolut actually supports.
      *
-     * Immediate cancellation, pause, resume and swap of subscriptions, adding
-     * a payment method server-side, and taxes are intentionally absent — those
-     * operations throw UnsupportedOperationException.
+     * Immediate cancellation, pause and resume of subscriptions, adding a
+     * payment method server-side, and taxes are intentionally absent — those
+     * operations throw UnsupportedOperationException. Swap is supported, but
+     * it is scheduled at the end of the billing cycle rather than immediate.
      *
      * {@inheritDoc}
      */
@@ -77,6 +78,7 @@ class RevolutGateway implements GatewayProvider
             Capability::Customers,
             Capability::Subscriptions,
             Capability::SubscriptionTrials,
+            Capability::SubscriptionSwap,
             Capability::PaymentMethodsList,
             Capability::PaymentMethodsDelete,
             Capability::Checkout,

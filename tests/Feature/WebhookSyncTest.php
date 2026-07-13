@@ -7,6 +7,7 @@ namespace Isapp\CashierRevolut\Tests\Feature;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Isapp\CashierRevolut\Models\RevolutSubscription;
+use Isapp\CashierRevolut\Models\RevolutSubscriptionItem;
 use Isapp\CashierRevolut\Tests\Fixtures\RevolutApi;
 use Isapp\CashierRevolut\Tests\Fixtures\User;
 use Isapp\CashierRevolut\Tests\TestCase;
@@ -73,6 +74,132 @@ class WebhookSyncTest extends TestCase
 
         // The billable's query-side now reflects the cancellation.
         $this->assertFalse($user->subscribed('default'));
+    }
+
+    public function test_a_subscription_sync_catches_up_with_a_landed_plan_change(): void
+    {
+        // A plan change is scheduled for cycle end and Revolut has no webhook
+        // for it, so the local item keeps naming the old variation until a
+        // later subscription sync sees Revolut report the new one.
+        RevolutApi::fake([
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(RevolutApi::subscription([
+                'state' => 'active',
+                'plan_variation_id' => 'plan_var_new',
+            ])),
+        ]);
+
+        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+
+        $subscription = RevolutSubscription::query()->create([
+            'owner_type' => $user->getMorphClass(),
+            'owner_id' => $user->getKey(),
+            'type' => 'default',
+            'provider' => 'revolut',
+            'provider_id' => RevolutApi::SUBSCRIPTION_ID,
+            'status' => SubscriptionStatus::Active,
+        ]);
+
+        RevolutSubscriptionItem::query()->create([
+            'subscription_id' => $subscription->getKey(),
+            'provider' => 'revolut',
+            'price' => 'plan_var_old',
+            'quantity' => 3,
+        ]);
+
+        // Status is unchanged (active → active): the plan must still sync, so
+        // this also pins the sync ahead of the unchanged-status short-circuit.
+        $this->synchronizer()->handle($this->payload('SUBSCRIPTION_INITIATED'));
+
+        $item = RevolutSubscriptionItem::query()->firstOrFail();
+        $this->assertSame('plan_var_new', $item->price);
+        // The variation changed, the quantity did not.
+        $this->assertSame(3, $item->quantity);
+        $this->assertTrue($user->subscribedToPrice('plan_var_new'));
+    }
+
+    public function test_a_paid_renewal_cycle_catches_the_local_plan_up_with_a_landed_swap(): void
+    {
+        // The renewal signal is ORDER_COMPLETED carrying subscription_data with
+        // billing_reason=cycle_billing — Revolut fires no webhook for the plan
+        // change itself, and the SUBSCRIPTION_* events never fire on a normal
+        // renewal. This is the only moment the deferred swap actually lands.
+        RevolutApi::fake([
+            '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order([
+                'state' => 'completed',
+                'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+                'subscription_data' => [
+                    'subscription_id' => RevolutApi::SUBSCRIPTION_ID,
+                    'billing_reason' => 'cycle_billing',
+                    'active_cycle_id' => 'cyc-0002',
+                ],
+            ])),
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(RevolutApi::subscription([
+                'state' => 'active',
+                'plan_variation_id' => 'plan_var_new',
+            ])),
+        ]);
+
+        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+
+        $subscription = RevolutSubscription::query()->create([
+            'owner_type' => $user->getMorphClass(),
+            'owner_id' => $user->getKey(),
+            'type' => 'default',
+            'provider' => 'revolut',
+            'provider_id' => RevolutApi::SUBSCRIPTION_ID,
+            'status' => SubscriptionStatus::Active,
+        ]);
+
+        RevolutSubscriptionItem::query()->create([
+            'subscription_id' => $subscription->getKey(),
+            'provider' => 'revolut',
+            'price' => 'plan_var_old',
+            'quantity' => 1,
+        ]);
+
+        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
+
+        $this->assertSame('plan_var_new', RevolutSubscriptionItem::query()->firstOrFail()->price);
+        $this->assertSame(1, RevolutSubscriptionItem::query()->count());
+        $this->assertTrue($user->subscribedToPrice('plan_var_new'));
+    }
+
+    public function test_a_failing_plan_resync_never_costs_the_renewal_payment(): void
+    {
+        // The plan resync is an extra API call bolted onto the payment path.
+        // If it explodes, the money must still be booked — a 404 here would
+        // otherwise be swallowed as "deterministic" and the payment lost.
+        Event::fake([PaymentSucceeded::class]);
+        RevolutApi::fake([
+            '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order([
+                'state' => 'completed',
+                'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+                'subscription_data' => [
+                    'subscription_id' => RevolutApi::SUBSCRIPTION_ID,
+                    'billing_reason' => 'cycle_billing',
+                ],
+            ])),
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(['message' => 'Gone.'], 404),
+        ]);
+
+        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+
+        RevolutSubscription::query()->create([
+            'owner_type' => $user->getMorphClass(),
+            'owner_id' => $user->getKey(),
+            'type' => 'default',
+            'provider' => 'revolut',
+            'provider_id' => RevolutApi::SUBSCRIPTION_ID,
+            'status' => SubscriptionStatus::Active,
+        ]);
+
+        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
+
+        $this->assertDatabaseHas('cashier_invoices', [
+            'provider_id' => RevolutApi::ORDER_ID,
+            'status' => PaymentStatus::Succeeded->value,
+        ]);
+        Event::assertDispatched(PaymentSucceeded::class);
     }
 
     public function test_a_completed_order_persists_a_local_invoice_and_dispatches_payment_succeeded(): void
