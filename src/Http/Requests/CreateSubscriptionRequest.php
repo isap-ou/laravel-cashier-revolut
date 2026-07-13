@@ -21,13 +21,10 @@ use Spatie\LaravelData\Mappers\SnakeCaseMapper;
 #[MapOutputName(SnakeCaseMapper::class)]
 class CreateSubscriptionRequest extends RevolutRequest
 {
-    /**
-     * @param  array<string, mixed>|null  $metadata
-     */
     public function __construct(
         public string $customerId,
         public string $planVariationId,
         public ?string $trialDuration = null,
-        public ?array $metadata = null,
+        public ?string $externalReference = null,
     ) {}
 }

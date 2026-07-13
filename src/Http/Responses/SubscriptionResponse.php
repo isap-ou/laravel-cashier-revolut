@@ -28,6 +28,7 @@ class SubscriptionResponse extends Data
         public ?string $state = null,
         public ?string $currentCycleId = null,
         public ?string $planVariationId = null,
+        public ?string $externalReference = null,
         #[WithCast(DateTimeInterfaceCast::class, format: RevolutDateFormats::FORMATS)]
         public ?CarbonImmutable $trialEndDate = null,
         #[WithCast(DateTimeInterfaceCast::class, format: RevolutDateFormats::FORMATS)]

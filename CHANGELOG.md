@@ -59,6 +59,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`withMetadata()` throws instead of silently losing the data.** The driver sent a
+  `metadata` field on `POST /api/subscriptions`; the API documents five fields and that
+  is not one of them, and no subscription endpoint returns it. Revolut ignored it, so an
+  app correlating a subscription with its own records had that correlation thrown away.
+
+  Revolut's correlation surface is a single `external_reference` string — not a metadata
+  map — and it is exposed as one: `RevolutSubscriptionBuilder::externalReference()`.
+  Mapping a one-entry array onto it would have made the same call work or fail depending
+  on how much the caller put in the array. The `create($pm, ['metadata' => ...])` back
+  door is closed too, as it was for `quantity`.
+
 - **A malformed argument is no longer reported as a subscription update failure.**
   A swap to no price at all (or to more prices than Revolut bills a subscription on),
   a bad phase id, an unknown change reason — all now raise `InvalidArgumentException`,

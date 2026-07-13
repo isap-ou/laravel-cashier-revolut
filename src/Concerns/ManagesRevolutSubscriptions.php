@@ -282,6 +282,31 @@ trait ManagesRevolutSubscriptions
     }
 
     /**
+     * The identifier your own system stored on the subscription.
+     *
+     * Revolut's whole correlation surface is this one string — there is no metadata
+     * map — so it must be readable, or the data would be write-only and the drop
+     * this driver set out to stop would simply move to the read side.
+     *
+     * @throws SubscriptionUpdateFailure When there is no such local subscription.
+     */
+    public function subscriptionExternalReference(Model $billable, string $type = 'default'): ?string
+    {
+        $record = $this->subscriptionRecord($billable, $type);
+        $id = $this->stringAttribute($record, 'provider_id');
+
+        if ($id === null || $id === '') {
+            throw new SubscriptionUpdateFailure("The [{$type}] subscription has no Revolut identifier.");
+        }
+
+        return $this->guardConnection(
+            fn (): ?string => SubscriptionResponse::from(
+                $this->revolut()->get("/subscriptions/{$id}")->json() ?? [],
+            )->externalReference,
+        );
+    }
+
+    /**
      * Cancel (204 No Content) then refetch the subscription for its state.
      *
      * $endsAt is passed through because Revolut's subscription resource has no
