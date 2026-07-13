@@ -13,6 +13,7 @@ use Isapp\CashierRevolut\Http\Responses\RefundResponse;
 use Isapp\CashierSupport\DTO\Payment;
 use Isapp\CashierSupport\DTO\Refund;
 use Isapp\CashierSupport\Enums\PaymentStatus;
+use Isapp\CashierSupport\Events\RefundProcessed;
 use Isapp\CashierSupport\Exceptions\PaymentFailedException;
 
 /**
@@ -62,6 +63,13 @@ trait PerformsRevolutCharges
      * Currency is only sent alongside an explicit partial-refund amount (or
      * when the caller provides it); a full refund omits both and lets Revolut
      * refund the original order amount in its own currency.
+     *
+     * Dispatches RefundProcessed. This is the only path to that event: Revolut's
+     * webhook catalogue carries no refund event (Order, Payment, Subscription,
+     * Payout and Dispute only), so a refund issued from the Revolut dashboard
+     * cannot be observed by the app.
+     *
+     * @see https://developer.revolut.com/docs/api/merchant/operations/create-webhook
      */
     public function refund(Model $billable, string $paymentId, array $options = []): Refund
     {
@@ -70,7 +78,7 @@ trait PerformsRevolutCharges
             ? $this->currencyFromOptions($options)
             : null;
 
-        return $this->guardConnection(function () use ($paymentId, $amount, $currency): Refund {
+        $refund = $this->guardConnection(function () use ($paymentId, $amount, $currency): Refund {
             $response = RefundResponse::from($this->revolut()->post(
                 "/orders/{$paymentId}/refund",
                 (new RefundOrderRequest($currency, $amount))->payload(),
@@ -78,5 +86,11 @@ trait PerformsRevolutCharges
 
             return $response->toRefund($paymentId);
         });
+
+        // Only once the API has confirmed the refund — a failed call raises
+        // before this line, so listeners never see a refund that did not happen.
+        event(new RefundProcessed($billable, $refund));
+
+        return $refund;
     }
 }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Isapp\CashierRevolut\Tests\Feature;
 
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Isapp\CashierRevolut\Checkout\RevolutCheckoutSession;
 use Isapp\CashierRevolut\Exceptions\RevolutApiException;
@@ -14,6 +15,7 @@ use Isapp\CashierRevolut\Tests\TestCase;
 use Isapp\CashierSupport\Contracts\GatewayProvider;
 use Isapp\CashierSupport\Enums\Capability;
 use Isapp\CashierSupport\Enums\PaymentStatus;
+use Isapp\CashierSupport\Events\RefundProcessed;
 use Isapp\CashierSupport\Exceptions\SubscriptionUpdateFailure;
 use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
 use Isapp\CashierSupport\Facades\Cashier;
@@ -97,6 +99,40 @@ class RevolutGatewayTest extends TestCase
         $this->assertSame('re_1', $refund->id);
         $this->assertSame('ord_1', $refund->paymentId);
         $this->assertSame(500, $refund->amount);
+    }
+
+    public function test_a_refund_dispatches_the_refund_processed_event(): void
+    {
+        // Refunds is a declared capability, so its lifecycle event must fire.
+        // It can only fire from here: Revolut's webhook catalogue has no refund
+        // event at all, so there is no other path to it.
+        Event::fake([RefundProcessed::class]);
+        Http::fake(['*/orders/ord_1/refund' => Http::response(['id' => 're_1', 'amount' => 500, 'currency' => 'EUR'])]);
+        $user = $this->customer();
+
+        $this->gateway()->refund($user, 'ord_1', ['amount' => 500, 'currency' => 'EUR']);
+
+        Event::assertDispatched(RefundProcessed::class, function (RefundProcessed $event) use ($user): bool {
+            return $event->billable->is($user)
+                && $event->refund->id === 're_1'
+                && $event->refund->paymentId === 'ord_1'
+                && $event->refund->amount === 500;
+        });
+    }
+
+    public function test_a_failed_refund_dispatches_nothing(): void
+    {
+        Event::fake([RefundProcessed::class]);
+        Http::fake(['*/orders/ord_1/refund' => Http::response(['message' => 'Order not found.'], 404)]);
+
+        try {
+            $this->gateway()->refund($this->customer(), 'ord_1', ['amount' => 500, 'currency' => 'EUR']);
+            $this->fail('Expected RevolutApiException.');
+        } catch (RevolutApiException) {
+            // expected
+        }
+
+        Event::assertNotDispatched(RefundProcessed::class);
     }
 
     public function test_it_creates_and_cancels_a_subscription(): void

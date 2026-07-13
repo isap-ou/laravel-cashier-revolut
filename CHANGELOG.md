@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `refund()` now dispatches `RefundProcessed`. `Capability::Refunds` was
+  declared and the API call worked, but the lifecycle event was never fired, so
+  an app listening for refunds through the provider-agnostic API got nothing.
+  This is the only path to that event — Revolut's webhook catalogue has no
+  refund event at all (Order, Payment, Subscription, Payout and Dispute only),
+  so a refund issued from the Revolut dashboard cannot be observed.
+
 ## [1.0.0] - 2026-07-02
 
 ### Added
