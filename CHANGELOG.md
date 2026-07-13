@@ -21,7 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an app listening for refunds through the provider-agnostic API got nothing.
   This is the only path to that event — Revolut's webhook catalogue has no
   refund event at all (Order, Payment, Subscription, Payout and Dispute only),
-  so a refund issued from the Revolut dashboard cannot be observed.
+  so a refund issued from the Revolut dashboard cannot be observed, and neither
+  can final settlement.
+- `refund()` now honours the refund order's state instead of trusting the bare
+  2xx, and throws `PaymentFailedException` when Revolut rejects it. The endpoint
+  answers `201 Refund order successfully created` — the refund is an order in
+  its own right, so a success response can still carry a `failed` or `cancelled`
+  state. `RefundResponse` maps `state` for this; the guard mirrors `charge()`.
+- Subscription webhooks now carry the grace period on the event's DTO.
+  `SubscriptionCanceled` was dispatched with `endsAt: null` while the record
+  held a real paid-through date — the same defect as above, on the webhook path.
 
 ## [1.0.0] - 2026-07-02
 

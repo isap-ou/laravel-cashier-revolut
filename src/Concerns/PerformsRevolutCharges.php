@@ -64,11 +64,20 @@ trait PerformsRevolutCharges
      * when the caller provides it); a full refund omits both and lets Revolut
      * refund the original order amount in its own currency.
      *
-     * Dispatches RefundProcessed. This is the only path to that event: Revolut's
-     * webhook catalogue carries no refund event (Order, Payment, Subscription,
-     * Payout and Dispute only), so a refund issued from the Revolut dashboard
-     * cannot be observed by the app.
+     * Dispatches RefundProcessed once Revolut has accepted the refund, and
+     * throws PaymentFailedException when it rejects it — the refund is an order
+     * in its own right, so a 2xx can still come back failed or cancelled
+     * (mirrors the state guard in charge()).
      *
+     * "Accepted" is as far as this can go: the response is 201 "Refund order
+     * successfully created", and Revolut's webhook catalogue carries no refund
+     * event (Order, Payment, Subscription, Payout and Dispute only). Final
+     * settlement is therefore not observable, and neither is a refund issued
+     * from the Revolut dashboard.
+     *
+     * @throws PaymentFailedException When Revolut rejects the refund.
+     *
+     * @see https://developer.revolut.com/docs/api/merchant/operations/refund-order
      * @see https://developer.revolut.com/docs/api/merchant/operations/create-webhook
      */
     public function refund(Model $billable, string $paymentId, array $options = []): Refund
@@ -84,11 +93,13 @@ trait PerformsRevolutCharges
                 (new RefundOrderRequest($currency, $amount))->payload(),
             )->json() ?? []);
 
+            if ($response->failed()) {
+                throw PaymentFailedException::forPayment($response->id, 'The refund failed.');
+            }
+
             return $response->toRefund($paymentId);
         });
 
-        // Only once the API has confirmed the refund — a failed call raises
-        // before this line, so listeners never see a refund that did not happen.
         event(new RefundProcessed($billable, $refund));
 
         return $refund;

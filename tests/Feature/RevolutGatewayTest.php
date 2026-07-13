@@ -10,12 +10,14 @@ use Illuminate\Support\Facades\Http;
 use Isapp\CashierRevolut\Checkout\RevolutCheckoutSession;
 use Isapp\CashierRevolut\Exceptions\RevolutApiException;
 use Isapp\CashierRevolut\Models\RevolutSubscription;
+use Isapp\CashierRevolut\Tests\Fixtures\RevolutApi;
 use Isapp\CashierRevolut\Tests\Fixtures\User;
 use Isapp\CashierRevolut\Tests\TestCase;
 use Isapp\CashierSupport\Contracts\GatewayProvider;
 use Isapp\CashierSupport\Enums\Capability;
 use Isapp\CashierSupport\Enums\PaymentStatus;
 use Isapp\CashierSupport\Events\RefundProcessed;
+use Isapp\CashierSupport\Exceptions\PaymentFailedException;
 use Isapp\CashierSupport\Exceptions\SubscriptionUpdateFailure;
 use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
 use Isapp\CashierSupport\Facades\Cashier;
@@ -135,6 +137,44 @@ class RevolutGatewayTest extends TestCase
         Event::assertNotDispatched(RefundProcessed::class);
     }
 
+    public function test_a_refund_rejected_in_the_body_throws_and_dispatches_nothing(): void
+    {
+        // The endpoint answers 201 "Refund order successfully created" — the
+        // refund is an order in its own right, so a 2xx can still carry a
+        // failed state. Dispatching on the bare 2xx would tell listeners money
+        // moved when it did not.
+        Event::fake([RefundProcessed::class]);
+        Http::fake(['*/orders/ord_1/refund' => Http::response([
+            'id' => 're_1', 'type' => 'refund', 'state' => 'failed', 'amount' => 500, 'currency' => 'EUR',
+        ], 201)]);
+
+        $this->expectException(PaymentFailedException::class);
+
+        try {
+            $this->gateway()->refund($this->customer(), 'ord_1', ['amount' => 500, 'currency' => 'EUR']);
+        } finally {
+            Event::assertNotDispatched(RefundProcessed::class);
+        }
+    }
+
+    public function test_a_full_refund_dispatches_the_documented_payload(): void
+    {
+        // No amount and no currency: Revolut refunds the whole order in its own
+        // currency. Uses the documented fixture, which comes back `processing`.
+        Event::fake([RefundProcessed::class]);
+        Http::fake(['*/orders/*/refund' => Http::response(RevolutApi::refund(), 201)]);
+        $user = $this->customer();
+
+        $refund = $this->gateway()->refund($user, RevolutApi::ORDER_ID);
+
+        $this->assertSame(100, $refund->amount);
+        Event::assertDispatched(RefundProcessed::class, function (RefundProcessed $event) use ($user): bool {
+            return $event->billable->is($user)
+                && $event->refund->paymentId === RevolutApi::ORDER_ID
+                && $event->refund->amount === 100;
+        });
+    }
+
     public function test_it_creates_and_cancels_a_subscription(): void
     {
         $this->fakeRevolut();
@@ -161,6 +201,30 @@ class RevolutGatewayTest extends TestCase
         // type — an app that renders the cancellation from it must not be told
         // access ended immediately while the customer has paid through the cycle.
         $this->assertSame('2099-08-01T00:00:00+00:00', $canceled->endsAt?->toIso8601String());
+    }
+
+    public function test_cancelling_without_an_active_cycle_ends_access_now_in_both_places(): void
+    {
+        // No current_cycle_id — there is no paid-through date to honour, so
+        // access ends now. The record and the returned DTO must agree; they are
+        // the same value by construction.
+        Http::fake([
+            '*/subscriptions/*/cancel' => Http::response(null, 204),
+            '*/subscriptions/sub_1' => Http::response(['id' => 'sub_1', 'state' => 'cancelled']),
+            '*/subscriptions' => Http::response(['id' => 'sub_1', 'state' => 'active']),
+        ]);
+        $user = $this->customer();
+        $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->create('pm_1');
+
+        $canceled = $this->gateway()->cancelSubscription($user, 'default');
+
+        $record = RevolutSubscription::query()->firstOrFail();
+        $this->assertNotNull($canceled->endsAt);
+        $this->assertSame(
+            $record->ends_at?->toIso8601String(),
+            $canceled->endsAt?->toIso8601String(),
+        );
+        $this->assertFalse($user->subscribed('default'));
     }
 
     public function test_it_throws_for_unsupported_subscription_operations(): void
