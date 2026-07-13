@@ -48,6 +48,17 @@ class RevolutCheckoutSession implements CheckoutSession, Responsable
     }
 
     /**
+     * The order token consumed by the Revolut Checkout Widget.
+     *
+     * This is the contract's provider-neutral client secret: what Stripe calls
+     * client_secret and Adyen calls sessionData, Revolut calls an order token.
+     */
+    public function clientSecret(): ?string
+    {
+        return $this->token;
+    }
+
+    /**
      * The order token for the Revolut Checkout Widget.
      */
     public function token(): ?string

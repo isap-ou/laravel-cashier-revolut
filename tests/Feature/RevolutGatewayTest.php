@@ -16,8 +16,11 @@ use Isapp\CashierRevolut\Tests\Fixtures\RevolutApi;
 use Isapp\CashierRevolut\Tests\Fixtures\User;
 use Isapp\CashierRevolut\Tests\TestCase;
 use Isapp\CashierSupport\Contracts\GatewayProvider;
+use Isapp\CashierSupport\DTO\CheckoutRequest;
 use Isapp\CashierSupport\Enums\Capability;
+use Isapp\CashierSupport\Enums\Currency;
 use Isapp\CashierSupport\Enums\PaymentStatus;
+use Isapp\CashierSupport\Enums\SwapTiming;
 use Isapp\CashierSupport\Events\RefundProcessed;
 use Isapp\CashierSupport\Events\SubscriptionUpdated;
 use Isapp\CashierSupport\Exceptions\PaymentFailedException;
@@ -66,7 +69,10 @@ class RevolutGatewayTest extends TestCase
 
         $this->assertTrue($gateway->supports(Capability::Charges));
         $this->assertTrue($gateway->supports(Capability::Subscriptions));
-        $this->assertTrue($gateway->supports(Capability::SubscriptionSwap));
+        $this->assertTrue($gateway->supports(Capability::SubscriptionSwapAtPeriodEnd));
+        $this->assertFalse($gateway->supports(Capability::SubscriptionSwapImmediate));
+        $this->assertTrue($gateway->supports(Capability::CheckoutAmount));
+        $this->assertFalse($gateway->supports(Capability::CheckoutPrices));
         $this->assertTrue($gateway->supports(Capability::PaymentMethodsList));
         $this->assertFalse($gateway->supports(Capability::SubscriptionPause));
         $this->assertFalse($gateway->supports(Capability::PaymentMethodsAdd));
@@ -270,7 +276,7 @@ class RevolutGatewayTest extends TestCase
         $user = $this->customer();
         $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->create('pm_1');
 
-        $subscription = $this->gateway()->swapSubscription($user, 'default', 'plan_var_2', [
+        $subscription = $this->gateway()->swapSubscription($user, 'default', 'plan_var_2', SwapTiming::AtPeriodEnd, [
             'reason' => RevolutChangePlanReason::CustomerRequest,
         ]);
 
@@ -301,7 +307,7 @@ class RevolutGatewayTest extends TestCase
         $user = $this->customer();
         $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->create('pm_1');
 
-        $this->gateway()->swapSubscription($user, 'default', 'plan_var_2');
+        $this->gateway()->swapSubscription($user, 'default', 'plan_var_2', SwapTiming::AtPeriodEnd);
 
         $this->assertDatabaseHas('cashier_subscription_items', ['price' => 'plan_var_1']);
         $this->assertDatabaseMissing('cashier_subscription_items', ['price' => 'plan_var_2']);
@@ -325,7 +331,7 @@ class RevolutGatewayTest extends TestCase
         $user = $this->customer();
         $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->create('pm_1');
 
-        $subscription = $this->gateway()->swapSubscription($user, 'default', 'plan_var_2');
+        $subscription = $this->gateway()->swapSubscription($user, 'default', 'plan_var_2', SwapTiming::AtPeriodEnd);
 
         $this->assertSame('sub_1', $subscription->id);
         Event::assertDispatched(SubscriptionUpdated::class);
@@ -345,7 +351,7 @@ class RevolutGatewayTest extends TestCase
         $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->create('pm_1');
         RevolutSubscriptionItem::query()->delete();
 
-        $this->gateway()->swapSubscription($user, 'default', 'plan_var_2');
+        $this->gateway()->swapSubscription($user, 'default', 'plan_var_2', SwapTiming::AtPeriodEnd);
 
         $item = RevolutSubscriptionItem::query()->firstOrFail();
         $this->assertSame('plan_var_1', $item->price);
@@ -408,7 +414,7 @@ class RevolutGatewayTest extends TestCase
         $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->create('pm_1');
 
         $this->expectException(SubscriptionUpdateFailure::class);
-        $this->gateway()->swapSubscription($user, 'default', '');
+        $this->gateway()->swapSubscription($user, 'default', '', SwapTiming::AtPeriodEnd);
     }
 
     public function test_swapping_without_a_local_subscription_fails(): void
@@ -416,7 +422,7 @@ class RevolutGatewayTest extends TestCase
         $this->fakeSwappableSubscription();
 
         $this->expectException(SubscriptionUpdateFailure::class);
-        $this->gateway()->swapSubscription($this->customer(), 'default', 'plan_var_2');
+        $this->gateway()->swapSubscription($this->customer(), 'default', 'plan_var_2', SwapTiming::AtPeriodEnd);
     }
 
     public function test_it_lists_payment_methods_but_cannot_add_one(): void
@@ -437,7 +443,10 @@ class RevolutGatewayTest extends TestCase
     {
         $this->fakeRevolut();
 
-        $session = $this->gateway()->checkout($this->customer(), 'plan_var_1', ['amount' => 1500, 'currency' => 'EUR']);
+        $session = $this->gateway()->checkout(
+            $this->customer(),
+            CheckoutRequest::forAmount(1500, Currency::EUR),
+        );
 
         $this->assertInstanceOf(RevolutCheckoutSession::class, $session);
         $this->assertSame('ord_1', $session->id());

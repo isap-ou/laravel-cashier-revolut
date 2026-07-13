@@ -5,70 +5,71 @@ declare(strict_types=1);
 namespace Isapp\CashierRevolut\Concerns;
 
 use Illuminate\Database\Eloquent\Model;
-use InvalidArgumentException;
 use Isapp\CashierRevolut\Checkout\RevolutCheckoutSession;
 use Isapp\CashierRevolut\Http\Requests\CreateOrderRequest;
 use Isapp\CashierRevolut\Http\Responses\OrderResponse;
 use Isapp\CashierSupport\Contracts\CheckoutSession;
-use Isapp\CashierSupport\Enums\CheckoutMode;
+use Isapp\CashierSupport\DTO\CheckoutRequest;
+use Isapp\CashierSupport\Enums\Capability;
+use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
 
 /**
  * Hosted checkout via a Revolut order + the Checkout Widget.
  *
- * Revolut has no price-identifier catalog for checkout, so $items is unused;
- * the order amount MUST be supplied via options['amount'] (minor units). The
- * returned session carries the order token for the widget and the hosted
- * checkout URL.
+ * Revolut checks out an amount, not a catalogue of price identifiers — which is
+ * what Capability::CheckoutAmount says, so a price-shaped request is refused by
+ * the support package before it ever reaches this trait. The amount is a typed
+ * field of the request now, not an undocumented key in an options bag, and this
+ * trait no longer throws an exception of its own.
+ *
+ * Revolut's order carries a single `redirect_url` and no cancel destination, so
+ * the request's cancelUrl has no counterpart and is not sent; the mode travels
+ * on the returned session, not on the order.
  */
 trait HandlesRevolutCheckout
 {
     /**
      * {@inheritDoc}
-     *
-     * @throws InvalidArgumentException When options['amount'] is missing or not positive.
      */
-    public function checkout(Model $billable, array|string $items, array $options = []): CheckoutSession
+    public function checkout(Model $billable, CheckoutRequest $request): CheckoutSession
     {
-        $amount = (int) ($options['amount'] ?? 0);
-
-        if ($amount <= 0) {
-            throw new InvalidArgumentException(
-                'Revolut checkout requires a positive options["amount"] in minor units; price identifiers are not supported.',
-            );
+        // The support gate already refuses a price-shaped request for this
+        // driver. This second check is what keeps a direct provider call
+        // (bypassing Billable) from POSTing an order with no amount — and
+        // capability() is also where a request built through Data::from(),
+        // which skips the named constructors, gets validated.
+        if ($request->capability() !== Capability::CheckoutAmount) {
+            throw UnsupportedOperationException::forCapability(Capability::CheckoutPrices);
         }
 
-        $redirect = $options['redirect_url'] ?? $options['success_url'] ?? null;
-
-        $request = new CreateOrderRequest(
-            amount: $amount,
-            currency: $this->currencyFromOptions($options),
-            customerId: $this->customerIdOrNull($billable),
-            redirectUrl: is_string($redirect) ? $redirect : null,
-        );
-
         $order = $this->guardConnection(
-            fn (): OrderResponse => OrderResponse::from($this->revolut()->post('/orders', $request->payload())->json() ?? []),
+            fn (): OrderResponse => OrderResponse::from(
+                $this->revolut()->post('/orders', $this->orderFor($billable, $request)->payload())->json() ?? [],
+            ),
         );
 
         return new RevolutCheckoutSession(
             id: $order->id,
             token: $order->token,
-            mode: $this->checkoutMode($options),
+            mode: $request->mode,
             url: $order->checkoutUrl,
         );
     }
 
-    /**
-     * @param  array<string, mixed>  $options
-     */
-    private function checkoutMode(array $options): CheckoutMode
+    private function orderFor(Model $billable, CheckoutRequest $request): CreateOrderRequest
     {
-        $mode = $options['mode'] ?? null;
+        $currency = $request->currency;
 
-        if ($mode instanceof CheckoutMode) {
-            return $mode;
-        }
-
-        return CheckoutMode::tryFrom(is_string($mode) ? $mode : 'payment') ?? CheckoutMode::Payment;
+        return new CreateOrderRequest(
+            // Guaranteed non-null and positive by the capability() check above.
+            amount: (int) $request->amount,
+            // A request built through Data::from() can carry an amount with no
+            // currency; fall back to the configured one, as a charge does.
+            currency: $currency !== null ? $currency->value : $this->currencyFromOptions($request->options),
+            customerId: $this->customerIdOrNull($billable),
+            redirectUrl: $request->successUrl,
+            description: $request->description,
+            metadata: $request->metadata === [] ? null : $request->metadata,
+        );
     }
 }

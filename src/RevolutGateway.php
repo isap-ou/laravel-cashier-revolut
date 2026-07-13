@@ -80,10 +80,10 @@ class RevolutGateway implements GatewayProvider
             Capability::Customers,
             Capability::Subscriptions,
             Capability::SubscriptionTrials,
-            Capability::SubscriptionSwap,
+            Capability::SubscriptionSwapAtPeriodEnd,
             Capability::PaymentMethodsList,
             Capability::PaymentMethodsDelete,
-            Capability::Checkout,
+            Capability::CheckoutAmount,
             Capability::Invoices,
             Capability::Webhooks,
         ];

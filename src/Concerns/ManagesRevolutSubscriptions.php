@@ -18,6 +18,7 @@ use Isapp\CashierRevolut\RevolutGateway;
 use Isapp\CashierSupport\Contracts\SubscriptionBuilder;
 use Isapp\CashierSupport\DTO\Subscription;
 use Isapp\CashierSupport\Enums\Capability;
+use Isapp\CashierSupport\Enums\SwapTiming;
 use Isapp\CashierSupport\Events\SubscriptionUpdated;
 use Isapp\CashierSupport\Exceptions\CashierException;
 use Isapp\CashierSupport\Exceptions\SubscriptionUpdateFailure;
@@ -162,8 +163,23 @@ trait ManagesRevolutSubscriptions
      *
      * @see https://developer.revolut.com/docs/api/merchant/operations/change-subscription-plan
      */
-    public function swapSubscription(Model $billable, string $type, string|array $prices, array $options = []): Subscription
-    {
+    public function swapSubscription(
+        Model $billable,
+        string $type,
+        string|array $prices,
+        SwapTiming $timing = SwapTiming::Immediate,
+        array $options = [],
+    ): Subscription {
+        // Revolut only ever schedules the change for the end of the cycle. The
+        // support gate already refuses Immediate for this driver; this second
+        // check is what keeps a direct provider call (bypassing Billable) from
+        // silently deferring a change the caller asked to apply now.
+        if ($timing !== SwapTiming::AtPeriodEnd) {
+            throw new UnsupportedOperationException(
+                'Revolut schedules a plan change at the end of the billing cycle; an immediate swap is not supported.',
+            );
+        }
+
         $planVariationId = $this->planVariationId($prices);
 
         $record = $this->subscriptionRecord($billable, $type);

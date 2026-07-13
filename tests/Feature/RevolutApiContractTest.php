@@ -14,9 +14,11 @@ use Isapp\CashierRevolut\Tests\Fixtures\User;
 use Isapp\CashierRevolut\Tests\TestCase;
 use Isapp\CashierRevolut\Webhooks\RevolutWebhookHandler;
 use Isapp\CashierSupport\Contracts\GatewayProvider;
+use Isapp\CashierSupport\DTO\CheckoutRequest;
 use Isapp\CashierSupport\Enums\Currency;
 use Isapp\CashierSupport\Enums\PaymentStatus;
 use Isapp\CashierSupport\Enums\SubscriptionStatus;
+use Isapp\CashierSupport\Enums\SwapTiming;
 use Isapp\CashierSupport\Enums\WebhookEvent;
 use Isapp\CashierSupport\Exceptions\PaymentFailedException;
 use Isapp\CashierSupport\Facades\Cashier;
@@ -217,7 +219,7 @@ class RevolutApiContractTest extends TestCase
         $user = $this->customer();
         $this->gateway()->newSubscription($user, 'default', '850e8400-e29b-41d4-a716-446655440003')->create();
 
-        $subscription = $this->gateway()->swapSubscription($user, 'default', '950e8400-e29b-41d4-a716-446655440004', [
+        $subscription = $this->gateway()->swapSubscription($user, 'default', '950e8400-e29b-41d4-a716-446655440004', SwapTiming::AtPeriodEnd, [
             'plan_variation_phase_id' => 'a60e8400-e29b-41d4-a716-446655440006',
             'reason' => 'merchant_request',
         ]);
@@ -295,10 +297,10 @@ class RevolutApiContractTest extends TestCase
     {
         RevolutApi::fake();
 
-        $session = $this->gateway()->checkout($this->customer(), '850e8400-e29b-41d4-a716-446655440003', [
-            'amount' => 500,
-            'currency' => 'GBP',
-        ]);
+        $session = $this->gateway()->checkout(
+            $this->customer(),
+            CheckoutRequest::forAmount(500, Currency::GBP),
+        );
 
         $this->assertSame(RevolutApi::ORDER_ID, $session->id());
         $this->assertSame(RevolutApi::ORDER_TOKEN, $session->token());
