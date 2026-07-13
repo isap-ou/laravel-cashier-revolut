@@ -21,13 +21,13 @@ When Revolut API does not natively support a feature:
 - `customers` — full CRUD: POST/GET/PATCH/DELETE /api/customers
 - `subscriptions` — create, list, get, cancel (POST /api/subscriptions/{id}/cancel)
 - `subscription.trials` — `trial_duration` at subscription creation
-- `subscription.swap` — POST /api/subscriptions/{id}/change-plan (204). Scheduled
+- `subscription.swap.at_period_end` — POST /api/subscriptions/{id}/change-plan (204). Scheduled
   `at_cycle_end` only — no proration, and a trial on the target variation is
   skipped. NOT a field on the PATCH update endpoint.
 - `payment_methods.list` — GET /api/customers/{id}/payment-methods
 - `payment_methods.get` — GET /api/customers/{id}/payment-methods/{id}
 - `payment_methods.delete` — DELETE /api/customers/{id}/payment-methods/{id} (204)
-- `checkout` — Revolut Checkout Widget
+- `checkout.amount` — Revolut Checkout Widget (an order amount; Revolut has no checkout price catalogue, so `checkout.prices` is NOT declared)
 - `webhooks` — ORDER_COMPLETED, SUBSCRIPTION_* events
 
 ## Provider-independent (handled by cashier-support, not Revolut API)
@@ -40,3 +40,5 @@ When Revolut API does not natively support a feature:
 - `subscription.pause` — state `paused` exists but no API endpoint to trigger
 - `subscription.resume` — no endpoint
 - `payment_methods.add` — no direct API, only via checkout widget flow
+- `subscription.swap.immediate` — change-plan is `at_cycle_end` only
+- `checkout.prices` — no checkout price catalogue; checkout takes an amount

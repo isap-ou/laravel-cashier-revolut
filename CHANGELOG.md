@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Revolut now declares what it can actually honour.** `Capability::SubscriptionSwapAtPeriodEnd`
+  and `Capability::CheckoutAmount` — and, deliberately, **not** `SubscriptionSwapImmediate`
+  or `CheckoutPrices`. Asking for an immediate swap (including by omitting the timing, since
+  `SwapTiming::Immediate` is the default) raises `UnsupportedOperationException` instead of
+  quietly scheduling a change that lands next month. `RevolutCheckoutSession::clientSecret()`
+  returns the order token — the contract's provider-neutral name for it.
+
 - **A renewal now has a signal.** `SubscriptionRenewed` is dispatched when a
   billing cycle is paid for, carrying the invoice that settled it. A plain
   renewal previously fired no subscription event at all — Revolut sends no
@@ -35,13 +42,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking: checkout takes a `CheckoutRequest`, swap takes a `SwapTiming`.**
+  `$user->checkout('plan', ['amount' => 1500])` becomes
+  `$user->checkout(CheckoutRequest::forAmount(1500, Currency::EUR))`, and
+  `$user->swapSubscription('default', $variation, $options)` becomes
+  `$user->swapSubscription('default', $variation, SwapTiming::AtPeriodEnd, $options)`.
+  The driver's own `InvalidArgumentException` for a missing `options['amount']` — which
+  lived outside the `CashierException` hierarchy — is gone: the amount is a typed field,
+  and a price-shaped request is refused by cashier-support before the driver sees it.
+  The order body now also carries `description` and `metadata` from the request. Nothing
+  was ever published, so no installation is affected.
+
 - `SUBSCRIPTION_OVERDUE` now maps to `WebhookEvent::SubscriptionPastDue` and
   dispatches `SubscriptionPastDue`, not `SubscriptionUpdated`. A failed payment is
   not "something changed" — that mapping was the second thing overloading that
   event.
 - Requires `isapp/laravel-cashier-support` ^1.0.
-
-### Changed
 
 - **The Revolut customer id no longer lives on the app's users table.** It is a
   row in the support package's `cashier_customers` (morphed owner + provider +
@@ -60,6 +76,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `$user->revolut_customer_id`.
 
 ### Fixed
+
+- **An order never linked to its customer.** The order body sent a flat
+  `customer_id`, which `POST /api/orders` does not define — the customer is a nested
+  `customer` object. Revolut ignored the field, so every order (checkout *and*
+  charge) was created attached to nobody: the widget offered no saved card, and the
+  card used to pay was never attached to the customer record, leaving a later
+  `charge($amount, $savedPaymentMethodId)` with no payment method to reach for.
 
 - **The driver was sending a `quantity` field Revolut does not accept.**
   `POST /api/subscriptions` documents exactly five fields, and `quantity` is not

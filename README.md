@@ -47,10 +47,10 @@ $user->charge(1500, $savedPaymentMethodId, ['currency' => 'eur']);
 $user->refund($orderId, ['amount' => 500]);
 
 $user->newSubscription('default', $planVariationId)->trialDays(14)->create($savedPaymentMethodId);
-$user->swapSubscription('default', $newPlanVariationId);
+$user->swapSubscription('default', $newPlanVariationId, SwapTiming::AtPeriodEnd);
 $user->cancelSubscription('default');
 
-$session = $user->checkout('plan', ['amount' => 1500, 'currency' => 'eur']);
+$session = $user->checkout(CheckoutRequest::forAmount(1500, Currency::EUR));
 return $session; // Responsable — redirects to the hosted checkout
 ```
 
@@ -109,10 +109,18 @@ subscription the driver sees — including one it did not create.
 item is a fixed amount multiplied by its quantity, fixed when the plan is
 created. To sell seats, create a plan variation that prices them.
 
+Because the timing is not negotiable, the driver declares
+`Capability::SubscriptionSwapAtPeriodEnd` and **not**
+`SubscriptionSwapImmediate`. A caller who asks for an immediate swap — including
+one who simply omits the timing, since `Immediate` is the default — gets an
+`UnsupportedOperationException` instead of a change that quietly lands next
+month. Deferral must be asked for:
+
 ```php
 use Isapp\CashierRevolut\Enums\RevolutChangePlanReason;
+use Isapp\CashierSupport\Enums\SwapTiming;
 
-$user->swapSubscription('default', $newPlanVariationId, [
+$user->swapSubscription('default', $newPlanVariationId, SwapTiming::AtPeriodEnd, [
     // Optional: which phase of the target variation to start from.
     'plan_variation_phase_id' => $phaseId,
     // Optional: informational only.
@@ -124,10 +132,38 @@ $user->swapSubscription('default', $newPlanVariationId, [
 
 ## Checkout Widget
 
+Revolut checks out an **amount**, not a catalogue of price identifiers — it has
+no checkout price catalogue at all. The driver declares
+`Capability::CheckoutAmount` and not `CheckoutPrices`, so a price-shaped request
+is refused by cashier-support with `UnsupportedOperationException` before it
+reaches the driver.
+
+```php
+use Isapp\CashierSupport\DTO\CheckoutRequest;
+use Isapp\CashierSupport\Enums\Currency;
+
+$session = $user->checkout(CheckoutRequest::forAmount(
+    amount: 1500,
+    currency: Currency::EUR,
+    description: 'One coffee',
+    successUrl: route('checkout.done'),
+));
+```
+
+An order is a one-off payment: `POST /orders` carries no mode, and a Revolut
+subscription is created through the subscriptions API. Any `CheckoutMode` other
+than `Payment` therefore raises `UnsupportedOperationException` rather than
+quietly becoming an order that never renews. Order `metadata` is validated
+against Revolut's restrictions before the call (string values only, at most 50
+pairs, values up to 500 characters, keys `^[a-zA-Z][a-zA-Z\d_]{0,39}$`) — a
+violation is named as an `InvalidArgumentException` instead of coming back as an
+opaque 400.
+
 `checkout()` creates a Revolut order and returns a `RevolutCheckoutSession`
 carrying the order `token` for the [Revolut Checkout Widget](https://developer.revolut.com/docs/sdks/merchant-web-sdk/initialize-widget/revolut-checkout)
-and the hosted `url`. The session is `Responsable`, so you can `return` it
-from a controller to redirect to the hosted page.
+and the hosted `url`. The token is also what `clientSecret()` returns — the
+contract's provider-neutral name for it. The session is `Responsable`, so you
+can `return` it from a controller to redirect to the hosted page.
 
 ## Webhooks
 

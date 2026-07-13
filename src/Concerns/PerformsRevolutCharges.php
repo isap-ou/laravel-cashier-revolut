@@ -6,6 +6,7 @@ namespace Isapp\CashierRevolut\Concerns;
 
 use Illuminate\Database\Eloquent\Model;
 use Isapp\CashierRevolut\Http\Requests\CreateOrderRequest;
+use Isapp\CashierRevolut\Http\Requests\OrderCustomerRequest;
 use Isapp\CashierRevolut\Http\Requests\PayOrderRequest;
 use Isapp\CashierRevolut\Http\Requests\RefundOrderRequest;
 use Isapp\CashierRevolut\Http\Responses\OrderResponse;
@@ -37,7 +38,7 @@ trait PerformsRevolutCharges
             $order = OrderResponse::from($this->revolut()->post('/orders', (new CreateOrderRequest(
                 amount: $amount,
                 currency: $this->currencyFromOptions($options),
-                customerId: $customerId,
+                customer: new OrderCustomerRequest($customerId),
             ))->payload())->json() ?? []);
 
             $type = is_string($options['payment_method_type'] ?? null) ? $options['payment_method_type'] : null;
