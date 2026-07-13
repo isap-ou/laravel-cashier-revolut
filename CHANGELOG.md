@@ -38,6 +38,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the renewal order completes (`ORDER_COMPLETED` whose
   `subscription_data.billing_reason` is `cycle_billing`), as well as on any
   subscription sync. `OrderResponse` maps `subscription_data` for this.
+- `cancelSubscription()` now returns a `Subscription` DTO carrying `endsAt`. The
+  grace period was written to the local record but dropped from the returned
+  DTO — which is the contract's declared return type, so an app rendering the
+  cancellation from it told the customer access had ended immediately while they
+  had in fact paid through the end of the billing cycle. `toSubscription()` takes
+  the date from the caller because Revolut's subscription resource has no end
+  date to map from: it lives on the active billing cycle.
+- `refund()` now dispatches `RefundProcessed`. `Capability::Refunds` was
+  declared and the API call worked, but the lifecycle event was never fired, so
+  an app listening for refunds through the provider-agnostic API got nothing.
+  This is the only path to that event — Revolut's webhook catalogue has no
+  refund event at all (Order, Payment, Subscription, Payout and Dispute only),
+  so a refund issued from the Revolut dashboard cannot be observed, and neither
+  can final settlement.
+- `refund()` now honours the refund order's state instead of trusting the bare
+  2xx, and throws `PaymentFailedException` when Revolut rejects it. The endpoint
+  answers `201 Refund order successfully created` — the refund is an order in
+  its own right, so a success response can still carry a `failed` or `cancelled`
+  state. `RefundResponse` maps `state` for this; the guard mirrors `charge()`.
+- Subscription webhooks now carry the grace period on the event's DTO.
+  `SubscriptionCanceled` was dispatched with `endsAt: null` while the record
+  held a real paid-through date — the same defect as above, on the webhook path.
 
 ### Changed
 

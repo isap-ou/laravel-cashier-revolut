@@ -139,6 +139,11 @@ dispatched as the support package's `WebhookReceived` / `WebhookHandled` events
 carrying a normalized `WebhookPayload`. Listen to those to react to gateway
 activity.
 
+**Refunds are the one gap.** Revolut's webhook catalogue has no refund event —
+it covers Order, Payment, Subscription, Payout and Dispute only. `RefundProcessed`
+is therefore dispatched from `refund()` itself, and a refund issued from the
+Revolut dashboard produces no event at all.
+
 ## Architecture
 
 - `RevolutGateway` implements the support `GatewayProvider` contract by composing
