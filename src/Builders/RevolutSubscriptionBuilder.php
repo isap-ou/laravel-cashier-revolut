@@ -7,6 +7,7 @@ namespace Isapp\CashierRevolut\Builders;
 use DateTimeInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\ConnectionException;
+use Isapp\CashierRevolut\Concerns\PersistsRevolutPlanVariation;
 use Isapp\CashierRevolut\Exceptions\RevolutApiException;
 use Isapp\CashierRevolut\Http\Requests\CreateSubscriptionRequest;
 use Isapp\CashierRevolut\Http\Responses\SubscriptionResponse;
@@ -27,6 +28,8 @@ use TypeError;
  */
 class RevolutSubscriptionBuilder implements SubscriptionBuilder
 {
+    use PersistsRevolutPlanVariation;
+
     private int $quantity = 1;
 
     private ?string $trialDuration = null;
@@ -90,16 +93,18 @@ class RevolutSubscriptionBuilder implements SubscriptionBuilder
         );
 
         try {
-            $subscription = SubscriptionResponse::from(
+            $response = SubscriptionResponse::from(
                 $this->connector->request()->post('/subscriptions', array_merge($request->payload(), $options))->json() ?? [],
-            )->toSubscription($this->type);
+            );
         } catch (ConnectionException $exception) {
             throw RevolutApiException::connectionFailed($exception);
         } catch (CannotCreateData|CannotCastDate|TypeError $exception) {
             throw RevolutApiException::unexpectedPayload($exception);
         }
 
-        $this->persist($subscription);
+        $subscription = $response->toSubscription($this->type);
+
+        $this->persist($subscription, $response->planVariationId ?? $this->planVariationId);
 
         return $subscription;
     }
@@ -123,11 +128,11 @@ class RevolutSubscriptionBuilder implements SubscriptionBuilder
         return $id;
     }
 
-    private function persist(Subscription $subscription): void
+    private function persist(Subscription $subscription, ?string $planVariationId): void
     {
         $model = Cashier::subscriptionModel(RevolutGateway::DRIVER);
 
-        $model::query()->updateOrCreate(
+        $record = $model::query()->updateOrCreate(
             ['provider' => RevolutGateway::DRIVER, 'provider_id' => $subscription->id],
             [
                 'owner_type' => $this->billable->getMorphClass(),
@@ -138,5 +143,7 @@ class RevolutSubscriptionBuilder implements SubscriptionBuilder
                 'ends_at' => $subscription->endsAt,
             ],
         );
+
+        $this->createPlanVariation($record, $planVariationId, $this->quantity);
     }
 }

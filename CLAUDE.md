@@ -18,7 +18,7 @@ Merchant API capabilities:
 - **Payments** — process payments on an order
 - **Customers** — create/manage customers, save payment methods
 - **Subscription Plans** — plan-based model with variations and phases (trial, monthly, yearly)
-- **Subscriptions** — create, list, get, update, cancel (no native pause/resume or swap endpoints)
+- **Subscriptions** — create, list, get, update, cancel, change plan (no native pause/resume endpoints)
 - **Billing Cycles** — first-class concept with dedicated endpoints per subscription
 - **Webhooks** — ORDER_COMPLETED, ORDER_PAYMENT_DECLINED, ORDER_PAYMENT_FAILED, SUBSCRIPTION_INITIATED, SUBSCRIPTION_FINISHED, SUBSCRIPTION_CANCELLED, SUBSCRIPTION_OVERDUE
 - **Checkout Widget** — JS widget for accepting payments (analogous to Stripe Elements)
@@ -91,7 +91,7 @@ src/
 
 ## Key differences from Stripe
 
-1. **Subscriptions** — plan-based model (plan → variation → phases) vs Stripe's price-based. No native pause/resume endpoints (`paused` state exists but no API trigger). No swap endpoint. Update limited to `external_reference` only. Unsupported operations throw `UnsupportedOperationException`.
+1. **Subscriptions** — plan-based model (plan → variation → phases) vs Stripe's price-based. No native pause/resume endpoints (`paused` state exists but no API trigger). Swap exists as a separate command (`POST /subscriptions/{id}/change-plan`), but is scheduled at cycle end — never prorated, and it skips a trial on the target variation. Update limited to `external_reference` only. Unsupported operations throw `UnsupportedOperationException`.
 2. **Invoices** — Revolut has no invoice API. Generated locally by cashier-support from payment/subscription data.
 3. **Checkout** — Revolut Checkout Widget (JS) instead of Stripe Checkout hosted page.
 4. **Currency** — Revolut supports 30+ currencies, amounts in minor units (cents).

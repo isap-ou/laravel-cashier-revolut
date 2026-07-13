@@ -393,6 +393,7 @@ final class RevolutApi
             '*/customers' => Http::response(self::customer(), 201),
             '*/subscriptions/*/cycles/*' => Http::response(['id' => 'cyc-0001', 'state' => 'active', 'start_date' => '2025-06-05T21:00:00Z', 'end_date' => '2025-07-05T21:00:00Z']),
             '*/subscriptions/*/cancel' => Http::response(null, 204),
+            '*/subscriptions/*/change-plan' => Http::response(null, 204),
             '*/subscriptions' => Http::response(self::subscription(), 201),
             '*/webhooks' => Http::response(self::webhookCreated()),
         ]);

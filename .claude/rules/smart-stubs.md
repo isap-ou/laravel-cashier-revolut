@@ -12,7 +12,7 @@ When Revolut API does not natively support a feature:
 - **DO** declare honest `capabilities()` in `RevolutGateway` — only what Revolut actually supports
 
 - **Do NOT** build local invoice generation (dompdf, spatie-pdf)
-- **Do NOT** simulate subscription pause/resume/swap with cancel+create
+- **Do NOT** simulate subscription pause/resume with cancel+create
 
 ## Supported Revolut operations (verified via OpenAPI spec 2025-12-04)
 
@@ -21,6 +21,9 @@ When Revolut API does not natively support a feature:
 - `customers` — full CRUD: POST/GET/PATCH/DELETE /api/customers
 - `subscriptions` — create, list, get, cancel (POST /api/subscriptions/{id}/cancel)
 - `subscription.trials` — `trial_duration` at subscription creation
+- `subscription.swap` — POST /api/subscriptions/{id}/change-plan (204). Scheduled
+  `at_cycle_end` only — no proration, and a trial on the target variation is
+  skipped. NOT a field on the PATCH update endpoint.
 - `payment_methods.list` — GET /api/customers/{id}/payment-methods
 - `payment_methods.get` — GET /api/customers/{id}/payment-methods/{id}
 - `payment_methods.delete` — DELETE /api/customers/{id}/payment-methods/{id} (204)
@@ -36,5 +39,4 @@ When Revolut API does not natively support a feature:
 
 - `subscription.pause` — state `paused` exists but no API endpoint to trigger
 - `subscription.resume` — no endpoint
-- `subscription.swap` — PATCH only supports `external_reference`, no plan change
 - `payment_methods.add` — no direct API, only via checkout widget flow

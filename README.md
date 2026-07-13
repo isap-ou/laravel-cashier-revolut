@@ -47,6 +47,7 @@ $user->charge(1500, $savedPaymentMethodId, ['currency' => 'eur']);
 $user->refund($orderId, ['amount' => 500]);
 
 $user->newSubscription('default', $planVariationId)->trialDays(14)->create($savedPaymentMethodId);
+$user->swapSubscription('default', $newPlanVariationId);
 $user->cancelSubscription('default');
 
 $session = $user->checkout('plan', ['amount' => 1500, 'currency' => 'eur']);
@@ -61,14 +62,61 @@ Money is always **integer minor units** (cents).
 |---|---|
 | Charges, Refunds, Customers | ✅ |
 | Subscriptions (create, cancel, trials) | ✅ (native Subscriptions API) |
+| Subscription swap | ✅ (scheduled at cycle end — see below) |
 | Payment methods (list, delete) | ✅ |
 | Checkout (widget) | ✅ |
 | Webhooks | ✅ |
-| Subscription pause / resume / swap | ❌ `UnsupportedOperationException` |
+| Subscription pause / resume | ❌ `UnsupportedOperationException` |
 | Add payment method server-side | ❌ (only via the checkout widget) |
 
 Unsupported operations throw `UnsupportedOperationException` rather than being
 faked — check `Cashier::supports(Capability::…)` before calling.
+
+### Swapping a plan is scheduled, not immediate
+
+Revolut applies a plan change at the **end of the current billing cycle**
+(`POST /subscriptions/{id}/change-plan`, `scheduled: at_cycle_end`). This is not
+a Stripe-style prorated swap, and the difference is load-bearing:
+
+- **An upgrade does not grant access right away.** The customer finishes the
+  current cycle on the old variation, at the old price. Gate your features on
+  what the subscription is actually billed on, not on the requested plan.
+- **Nothing is prorated.** No credit, no immediate charge.
+- **A trial on the target variation is skipped.** Trials only apply when a
+  subscription is first created, so swapping "to the trial plan" silently does
+  not trial.
+
+Because the change is deferred, the local `cashier_subscription_items` row keeps
+naming the variation Revolut still reports — so `subscribedToPrice()` stays
+truthful during the remainder of the cycle. Revolut fires no webhook for a plan
+change, so the local record catches up when the **renewal is paid**: the
+`ORDER_COMPLETED` webhook for the order whose `subscription_data.billing_reason`
+is `cycle_billing`. That is the moment the new variation actually takes effect.
+
+**Webhooks must be configured for this to work** — without them the local item
+row keeps naming the old variation indefinitely.
+
+`SubscriptionUpdated` is dispatched twice over a swap's life: once when it is
+scheduled, and once when it lands on the paid renewal. Distinguish them by the
+plan the subscription is actually billed on.
+
+Only `newSubscription()` creates the local item row, because only it knows the
+quantity — Revolut's subscription resource does not expose one. Subscriptions
+created before this feature shipped therefore have no item row, and
+`subscribedToPrice()` returns `false` for them; there is no backfill.
+
+```php
+use Isapp\CashierRevolut\Enums\RevolutChangePlanReason;
+
+$user->swapSubscription('default', $newPlanVariationId, [
+    // Optional: which phase of the target variation to start from.
+    'plan_variation_phase_id' => $phaseId,
+    // Optional: informational only.
+    'reason' => RevolutChangePlanReason::CustomerRequest,
+]);
+```
+
+`SubscriptionUpdated` is dispatched on a successful swap.
 
 ## Checkout Widget
 

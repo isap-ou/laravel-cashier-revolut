@@ -7,6 +7,7 @@ namespace Isapp\CashierRevolut\Webhooks;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\PendingRequest;
+use Isapp\CashierRevolut\Concerns\PersistsRevolutPlanVariation;
 use Isapp\CashierRevolut\Enums\RevolutWebhookEvent;
 use Isapp\CashierRevolut\Exceptions\RevolutApiException;
 use Isapp\CashierRevolut\Http\Responses\OrderResponse;
@@ -25,6 +26,7 @@ use Isapp\CashierSupport\Events\SubscriptionUpdated;
 use Isapp\CashierSupport\Facades\Cashier;
 use Isapp\CashierSupport\Models\Subscription as SubscriptionRecord;
 use Psr\Log\LoggerInterface;
+use Throwable;
 
 /**
  * Applies a verified Revolut webhook to local state.
@@ -44,6 +46,8 @@ use Psr\Log\LoggerInterface;
  */
 class RevolutWebhookSynchronizer
 {
+    use PersistsRevolutPlanVariation;
+
     public function __construct(
         private readonly RevolutConnector $connector,
         private readonly Repository $config,
@@ -135,6 +139,13 @@ class RevolutWebhookSynchronizer
                 : null,
         ])->save();
 
+        // Keep the variation mirrored here too — a belt-and-braces resync for
+        // state changed on Revolut's side. The renewal itself is what lands a
+        // scheduled plan change, and that arrives as ORDER_COMPLETED (see
+        // syncOrder), not as a SUBSCRIPTION_* event. Runs before the
+        // unchanged-status short-circuit so it is not skipped.
+        $this->persistPlanVariation($record, $response->planVariationId);
+
         $owner = $record->owner()->first();
 
         if (! $owner instanceof Model || $previousStatus === $status) {
@@ -155,6 +166,57 @@ class RevolutWebhookSynchronizer
             RevolutWebhookEvent::SubscriptionFinished => new SubscriptionCanceled($owner, $subscription),
             default => new SubscriptionUpdated($owner, $subscription),
         });
+    }
+
+    /**
+     * Re-mirror the plan variation a subscription is billed on, after a new
+     * cycle has been paid for — the moment a plan change scheduled
+     * at_cycle_end actually lands.
+     *
+     * Best-effort by construction: the payment it follows is already booked,
+     * so a failure here must never bubble up and cost the invoice or a webhook
+     * retry storm. A missed resync is repaired by the next renewal or by any
+     * SUBSCRIPTION_* sync.
+     */
+    private function syncSubscriptionPlan(Model $owner, string $subscriptionId): void
+    {
+        $model = Cashier::subscriptionModel(RevolutGateway::DRIVER);
+
+        /** @var SubscriptionRecord|null $record */
+        $record = $model::query()
+            ->where('provider', RevolutGateway::DRIVER)
+            ->where('provider_id', $subscriptionId)
+            ->first();
+
+        if ($record === null) {
+            return;
+        }
+
+        try {
+            $response = SubscriptionResponse::from(
+                $this->request()->get("/subscriptions/{$subscriptionId}")->json() ?? [],
+            );
+        } catch (Throwable $exception) {
+            $this->logger->warning('Revolut plan resync after a renewal failed', [
+                'subscription_id' => $subscriptionId,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return;
+        }
+
+        $previousPlan = $this->currentPlanVariation($record);
+
+        $this->persistPlanVariation($record, $response->planVariationId);
+
+        // The deferred change has landed: this — not the swap call that merely
+        // scheduled it — is when the customer is actually on the new plan.
+        if ($response->planVariationId !== null && $response->planVariationId !== $previousPlan) {
+            event(new SubscriptionUpdated(
+                $owner,
+                $response->toSubscription((string) $record->getAttribute('type')),
+            ));
+        }
     }
 
     /**
@@ -202,6 +264,16 @@ class RevolutWebhookSynchronizer
             // Dispatch exactly once — redeliveries update the same record.
             if ($invoice->wasRecentlyCreated) {
                 event(new PaymentSucceeded($owner, $payment));
+            }
+
+            // A completed cycle-billing order IS the renewal signal, and the
+            // renewal is when a scheduled plan change takes effect (Revolut
+            // fires no webhook for the change itself, and the SUBSCRIPTION_*
+            // events do not fire on a normal renewal). Strictly after the
+            // payment is booked: the plan resync costs an extra API call, and
+            // money must never be lost because that call failed.
+            if ($event === RevolutWebhookEvent::OrderCompleted && $order->subscriptionData?->isCycleBilling() === true) {
+                $this->syncSubscriptionPlan($owner, $order->subscriptionData->subscriptionId);
             }
 
             return;
