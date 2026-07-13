@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace Isapp\CashierRevolut\Tests\Unit;
 
-use Isapp\CashierRevolut\Exceptions\UnexpectedWebhookEventException;
 use Isapp\CashierRevolut\Webhooks\RevolutWebhookHandler;
 use Isapp\CashierSupport\Enums\WebhookEvent;
 use Isapp\CashierSupport\Exceptions\InvalidConfigurationException;
+use Isapp\CashierSupport\Exceptions\UnexpectedWebhookEventException;
 use Isapp\CashierSupport\Exceptions\WebhookVerificationException;
 use PHPUnit\Framework\TestCase;
 

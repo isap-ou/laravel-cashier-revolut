@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace Isapp\CashierRevolut\Webhooks;
 
 use Isapp\CashierRevolut\Enums\RevolutWebhookEvent;
-use Isapp\CashierRevolut\Exceptions\UnexpectedWebhookEventException;
 use Isapp\CashierSupport\Contracts\WebhookHandler;
 use Isapp\CashierSupport\DTO\WebhookPayload;
 use Isapp\CashierSupport\Exceptions\InvalidConfigurationException;
+use Isapp\CashierSupport\Exceptions\UnexpectedWebhookEventException;
 use Isapp\CashierSupport\Exceptions\WebhookVerificationException;
 
 /**
