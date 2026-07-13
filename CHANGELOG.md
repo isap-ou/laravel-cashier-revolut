@@ -114,6 +114,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An app-initiated cancellation now fires `SubscriptionCanceled`.** It fired nothing at
+  all: `cancelSubscription()` wrote the status itself, and the `SUBSCRIPTION_CANCELLED`
+  webhook that followed found the status already `Canceled` and short-circuited on its
+  "only announce a real transition" guard. So the *common* case — the customer cancelling
+  in the app — silently ran no listener: no revoked access, no dunning, no analytics.
+  Only a cancellation made in the Revolut dashboard produced an event.
+
+  Cancelling an already-cancelled subscription is now a local no-op: Revolut refuses to
+  cancel one that is `cancelled` or `finished`, so a repeat click used to reach the API
+  and come back as an exception. And a subscription that never paid its setup order
+  announces no cancellation, because it was never announced as created.
+
+  `SubscriptionCreated` is now also dispatched by the builder — but **only** when the
+  subscription comes back live. Revolut creates one `pending`, with a setup order the
+  customer still has to pay in the Checkout Widget, and announcing that would grant
+  access to a customer who may never pay (an abandoned setup produces no webhook, so
+  nothing would take it back). The paid setup, reported as `SUBSCRIPTION_INITIATED`, is
+  what announces it. A subscription that is live at creation has no such transition
+  coming, and would otherwise be announced nowhere.
+
 - **A misconfigured driver refuses the webhook with a 400 and a log line, instead of
   rendering an unhandled 500.** `verifyWebhook()` threw `InvalidConfigurationException`
   and the controller did not catch it — and neither did it catch the same exception from

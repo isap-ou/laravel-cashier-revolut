@@ -18,7 +18,9 @@ use Isapp\CashierRevolut\RevolutGateway;
 use Isapp\CashierSupport\Contracts\SubscriptionBuilder;
 use Isapp\CashierSupport\DTO\Subscription;
 use Isapp\CashierSupport\Enums\Capability;
+use Isapp\CashierSupport\Enums\SubscriptionStatus;
 use Isapp\CashierSupport\Enums\SwapTiming;
+use Isapp\CashierSupport\Events\SubscriptionCanceled;
 use Isapp\CashierSupport\Events\SubscriptionPriceChangeScheduled;
 use Isapp\CashierSupport\Events\SubscriptionUpdated;
 use Isapp\CashierSupport\Exceptions\CashierException;
@@ -63,6 +65,18 @@ trait ManagesRevolutSubscriptions
             throw new SubscriptionUpdateFailure("The [{$type}] subscription has no Revolut identifier.");
         }
 
+        // Revolut refuses to cancel a subscription that is already `cancelled` or
+        // `finished` (cancel-subscription.md), so a repeat click — or a cancellation
+        // a dashboard webhook already applied — would come back as a 4xx, i.e. as an
+        // exception in the customer's face for asking twice for something already
+        // done. It is a no-op, and it announces nothing: the cancellation it is
+        // asking for has already been announced.
+        $previousStatus = $record->status;
+
+        if ($previousStatus === SubscriptionStatus::Canceled) {
+            return $this->localSubscription($record, $type);
+        }
+
         // Revolut's cancel takes effect immediately for future billing and
         // returns 204 — but the customer paid through the ACTIVE cycle's
         // end_date. Grab it before cancelling (the spec does not guarantee the
@@ -95,7 +109,13 @@ trait ManagesRevolutSubscriptions
         });
 
         $record->forceFill([
-            'status' => $subscription->status,
+            // Only a state Revolut actually named. status() falls back to
+            // Incomplete for an absent or unknown state, and writing THAT over a
+            // cancelled subscription would both corrupt the row and make the
+            // webhook that follows announce the cancellation a second time.
+            ...($subscription->status !== SubscriptionStatus::Incomplete
+                ? ['status' => $subscription->status]
+                : []),
             'ends_at' => $endsAt,
             // A cancelled subscription will not renew, so a change scheduled for
             // the next cycle can never land. Advertising it would promise the
@@ -114,6 +134,21 @@ trait ManagesRevolutSubscriptions
                 'current_period_end' => $cycle->endDate,
             ] : []),
         ])->save();
+
+        // An app-initiated cancellation used to announce nothing at all: it wrote
+        // the status itself, and the SUBSCRIPTION_CANCELLED webhook that followed
+        // found the status already Canceled and short-circuited. So the common case
+        // — the customer cancelling in the app — fired no SubscriptionCanceled, and
+        // everything hung off it (revoking access, dunning, analytics) never ran.
+        //
+        // Only for a subscription the app was ever told about. One still waiting for
+        // its setup payment was deliberately never announced as created — announcing
+        // its cancellation would hand a listener the end of a life it never saw
+        // begin: a "your subscription is cancelled" email for a subscription nobody
+        // ever paid for.
+        if ($previousStatus !== SubscriptionStatus::Incomplete) {
+            event(new SubscriptionCanceled($billable, $subscription));
+        }
 
         return $subscription;
     }

@@ -226,6 +226,31 @@ dispatched as the support package's `WebhookReceived` / `WebhookHandled` events
 carrying a normalized `WebhookPayload`. Listen to those to react to gateway
 activity.
 
+**Who announces what, and exactly once.**
+
+`SubscriptionCanceled` is dispatched by `cancelSubscription()` itself. It used to be
+dispatched nowhere: the method wrote `status = Canceled`, and the
+`SUBSCRIPTION_CANCELLED` webhook that followed saw the status already Canceled and
+short-circuited on its "announce only a real transition" guard. So the *common* case —
+the customer cancelling in the app — ran no listener at all. A cancellation made in the
+Revolut dashboard is still announced by the webhook, because the app has no other way
+to learn of it.
+
+Cancelling an already-cancelled subscription is a no-op that talks to nobody: Revolut
+refuses to cancel one that is `cancelled` or `finished`, so a repeat click would
+otherwise come back as an exception. And cancelling one that never paid its setup order
+announces nothing — it was never announced as created, and a listener should not be
+handed the end of a life it never saw begin.
+
+`SubscriptionCreated` is dispatched when the subscription is actually **live**, which is
+usually *not* at creation: Revolut creates a subscription `pending`, with a setup order
+the customer still has to pay in the Checkout Widget. Announcing that would grant access
+to a customer who may close the widget and never pay — and an abandoned setup produces no
+webhook, so nothing would take it back. It is announced when `SUBSCRIPTION_INITIATED`
+reports the setup payment has landed. A subscription that comes back live at creation (a
+trial, say) has no such transition coming, so the builder announces it there instead —
+either way, exactly one event.
+
 **Refunds are the one gap.** Revolut's webhook catalogue has no refund event —
 it covers Order, Payment, Subscription, Payout and Dispute only. `RefundProcessed`
 is therefore dispatched from `refund()` itself, and a refund issued from the
