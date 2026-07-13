@@ -21,31 +21,49 @@ use Isapp\CashierSupport\Models\SubscriptionItem;
  * effect at the end of the current cycle, and until Revolut reports the new
  * variation, the local row still names the one the customer is paying for.
  *
- * Only the price is mirrored. The Revolut subscription resource carries no
- * quantity at all, so only the builder — which is handed one by the caller —
- * may create the row. Every other path updates an existing row and never
- * inserts: inventing a quantity of 1 for a subscription that was created with
- * five seats would be worse than having no row.
+ * Quantity is stored as null, because Revolut has no per-subscription quantity
+ * to report: it lives on the plan variation's items, fixed when the plan is
+ * created. Null means "not applicable", which is the truth — and now a
+ * writable one, so every path may create the row. It previously could not:
+ * with a NOT NULL column the only options were to invent a 1 (billing a
+ * five-seat plan as one seat) or to write nothing, which left
+ * subscribedToPrice() false forever for any subscription the builder had not
+ * created.
  */
 trait PersistsRevolutPlanVariation
 {
     /**
-     * Update the plan variation on the subscription's single local item.
-     *
-     * No-op when the subscription has no item row — see the class docblock.
+     * Mirror the plan variation onto the subscription's single local item,
+     * creating the row when it does not exist yet.
      */
     protected function persistPlanVariation(Subscription $record, ?string $planVariationId): void
     {
-        $this->writePlanVariation($record, $planVariationId, null, createIfMissing: false);
-    }
+        if ($planVariationId === null || $planVariationId === '') {
+            return;
+        }
 
-    /**
-     * Create (or update) the item row for a subscription being set up, where
-     * the caller-supplied quantity is known.
-     */
-    protected function createPlanVariation(Subscription $record, ?string $planVariationId, int $quantity): void
-    {
-        $this->writePlanVariation($record, $planVariationId, $quantity, createIfMissing: true);
+        DB::transaction(function () use ($record, $planVariationId): void {
+            // Serialize writers on the parent row before the read-modify-write
+            // below. A webhook delivery can race a swap (or the initial
+            // create), and cashier_subscription_items carries no unique index
+            // on subscription_id — it stays multi-item for other drivers — so
+            // two writers that both miss the row would both insert one.
+            $record->newQuery()->whereKey($record->getKey())->lockForUpdate()->first();
+
+            $model = Cashier::subscriptionItemModel(RevolutGateway::DRIVER);
+
+            $item = $this->planItem($record) ?? new $model;
+
+            $item->forceFill([
+                'subscription_id' => $record->getKey(),
+                'provider' => RevolutGateway::DRIVER,
+                'price' => $planVariationId,
+                // Not a default: Revolut has no per-subscription quantity to
+                // report, and "unknown" is the truth. Writing 1 here would bill
+                // a five-seat plan as one seat.
+                'quantity' => null,
+            ])->save();
+        });
     }
 
     /**
@@ -54,45 +72,6 @@ trait PersistsRevolutPlanVariation
     protected function currentPlanVariation(Subscription $record): ?string
     {
         return $this->planItem($record)?->price;
-    }
-
-    private function writePlanVariation(Subscription $record, ?string $planVariationId, ?int $quantity, bool $createIfMissing): void
-    {
-        if ($planVariationId === null || $planVariationId === '') {
-            return;
-        }
-
-        DB::transaction(function () use ($record, $planVariationId, $quantity, $createIfMissing): void {
-            // Serialize writers on the parent row before the read-modify-write
-            // below. A webhook delivery can race a swap (or the initial
-            // create), and cashier_subscription_items carries no unique index
-            // on subscription_id — it stays multi-item for other drivers — so
-            // two writers that both miss the row would both insert one.
-            $record->newQuery()->whereKey($record->getKey())->lockForUpdate()->first();
-
-            $item = $this->planItem($record);
-
-            if ($item === null) {
-                if (! $createIfMissing) {
-                    return;
-                }
-
-                $model = Cashier::subscriptionItemModel(RevolutGateway::DRIVER);
-                $item = new $model;
-            }
-
-            $item->forceFill([
-                'subscription_id' => $record->getKey(),
-                'provider' => RevolutGateway::DRIVER,
-                'price' => $planVariationId,
-            ]);
-
-            if ($quantity !== null) {
-                $item->forceFill(['quantity' => $quantity]);
-            }
-
-            $item->save();
-        });
     }
 
     private function planItem(Subscription $record): ?SubscriptionItem

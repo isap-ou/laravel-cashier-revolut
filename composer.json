@@ -24,7 +24,7 @@
         "illuminate/routing": "^11.0|^12.0|^13.0",
         "illuminate/support": "^11.0|^12.0|^13.0",
         "isap-ou/laravel-enum-helpers": "^1.5",
-        "isapp/laravel-cashier-support": "^1.1",
+        "isapp/laravel-cashier-support": "^2.0",
         "nesbot/carbon": "^3.0",
         "psr/log": "^3.0",
         "spatie/laravel-data": "^4.23",
@@ -45,7 +45,7 @@
             "options": {
                 "symlink": true,
                 "versions": {
-                    "isapp/laravel-cashier-support": "1.1.0"
+                    "isapp/laravel-cashier-support": "2.0.0"
                 }
             }
         }

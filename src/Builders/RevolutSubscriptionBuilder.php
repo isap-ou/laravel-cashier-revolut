@@ -15,7 +15,9 @@ use Isapp\CashierRevolut\Http\RevolutConnector;
 use Isapp\CashierRevolut\RevolutGateway;
 use Isapp\CashierSupport\Contracts\SubscriptionBuilder;
 use Isapp\CashierSupport\DTO\Subscription;
+use Isapp\CashierSupport\Enums\Capability;
 use Isapp\CashierSupport\Exceptions\CustomerNotFoundException;
+use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
 use Isapp\CashierSupport\Facades\Cashier;
 use Spatie\LaravelData\Exceptions\CannotCastDate;
 use Spatie\LaravelData\Exceptions\CannotCreateData;
@@ -29,8 +31,6 @@ use TypeError;
 class RevolutSubscriptionBuilder implements SubscriptionBuilder
 {
     use PersistsRevolutPlanVariation;
-
-    private int $quantity = 1;
 
     private ?string $trialDuration = null;
 
@@ -60,11 +60,16 @@ class RevolutSubscriptionBuilder implements SubscriptionBuilder
         return $this->trialDays($days);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * Revolut has no per-subscription quantity: it lives on the plan variation's
+     * items, fixed when the plan is created. Sell seats by creating a plan
+     * variation that prices them.
+     */
     public function quantity(int $quantity): static
     {
-        $this->quantity = $quantity;
-
-        return $this;
+        throw UnsupportedOperationException::forCapability(Capability::SubscriptionQuantity);
     }
 
     public function withMetadata(array $metadata): static
@@ -84,11 +89,17 @@ class RevolutSubscriptionBuilder implements SubscriptionBuilder
      */
     public function create(?string $paymentMethod = null, array $options = []): Subscription
     {
+        // $options is a passthrough to the API, so it is also a back door: it
+        // would happily carry the very field quantity() refuses. Close it, or
+        // the throw above is decoration.
+        if (array_key_exists('quantity', $options)) {
+            throw UnsupportedOperationException::forCapability(Capability::SubscriptionQuantity);
+        }
+
         $request = new CreateSubscriptionRequest(
             customerId: $this->customerId(),
             planVariationId: $this->planVariationId,
             trialDuration: $this->trialDuration,
-            quantity: $this->quantity,
             metadata: $this->metadata !== [] ? $this->metadata : null,
         );
 
@@ -144,6 +155,6 @@ class RevolutSubscriptionBuilder implements SubscriptionBuilder
             ],
         );
 
-        $this->createPlanVariation($record, $planVariationId, $this->quantity);
+        $this->persistPlanVariation($record, $planVariationId);
     }
 }
