@@ -114,6 +114,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A misconfigured driver refuses the webhook with a 400 and a log line, instead of
+  rendering an unhandled 500.** `verifyWebhook()` threw `InvalidConfigurationException`
+  and the controller did not catch it — and neither did it catch the same exception from
+  the **synchronizer**, which calls back into the API, so a missing `secret_key` (as
+  opposed to the webhook secret) 500'd one path over.
+
+  Revolut acknowledges a delivery with any 200-399 and retries a failed one — a 4XX or a
+  timeout — three more times, ten minutes apart. That window is the event's only chance
+  of surviving the fix; a 500 renders whatever the app's error handler decides and its
+  retry behaviour is undocumented.
+
+  Every refusal is now audible: `critical` for a misconfiguration, `warning` for a
+  signature that does not verify (a rotated secret is the likelier mistake, and refused
+  every webhook in complete silence), `info` for an event acknowledged without being
+  handled. The alternative symptom is a subscription mirror that quietly goes stale.
+
+- `UnexpectedWebhookEventException` moved to cashier-support: it was a driver-private
+  type thrown from a contract method, so a support-level caller of `parseWebhook()` could
+  not catch it without naming the driver.
+
 - **An order never linked to its customer.** The order body sent a flat
   `customer_id`, which `POST /api/orders` does not define — the customer is a nested
   `customer` object. Revolut ignored the field, so every order (checkout *and*
