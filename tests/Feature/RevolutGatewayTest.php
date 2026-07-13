@@ -57,7 +57,7 @@ class RevolutGatewayTest extends TestCase
 
     private function customer(): User
     {
-        return User::query()->create(['name' => 'Ada', 'email' => 'ada@example.com', 'revolut_customer_id' => 'cus_1']);
+        return User::asRevolutCustomer('cus_1');
     }
 
     public function test_it_declares_honest_capabilities(): void
@@ -80,7 +80,7 @@ class RevolutGatewayTest extends TestCase
         $customer = $this->gateway()->createCustomer($user);
 
         $this->assertSame('cus_1', $customer->id);
-        $this->assertSame('cus_1', $user->refresh()->revolut_customer_id);
+        $this->assertSame('cus_1', $user->customerId());
         Http::assertSent(fn ($request) => str_ends_with($request->url(), '/api/customers') && $request->method() === 'POST');
     }
 

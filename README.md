@@ -13,7 +13,7 @@ PHP `^8.2`, Laravel **11, 12 or 13**, and `isapp/laravel-cashier-support`.
 ```bash
 composer require isapp/laravel-cashier-revolut
 php artisan vendor:publish --tag=cashier-revolut-config
-php artisan vendor:publish --tag=cashier-revolut-migrations
+php artisan vendor:publish --tag=cashier-support-migrations
 php artisan migrate
 ```
 

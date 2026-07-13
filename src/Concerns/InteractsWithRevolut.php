@@ -57,19 +57,17 @@ trait InteractsWithRevolut
     }
 
     /**
-     * The Revolut customer identifier stored on the billable model.
+     * The Revolut customer identifier for the billable.
+     *
+     * Stored in cashier_customers, not on the billable's own table: a
+     * driver-named column would need a second one for every further gateway, and
+     * could never be reverse-looked-up across billable types.
      *
      * @throws CustomerNotFoundException When the model is not a Revolut customer yet.
      */
     protected function revolutCustomerId(Model $billable): string
     {
-        $id = $billable->getAttribute('revolut_customer_id');
-
-        if (! is_string($id) || $id === '') {
-            throw CustomerNotFoundException::notCreated();
-        }
-
-        return $id;
+        return $this->customerIdFor($billable);
     }
 
     /**
@@ -80,14 +78,6 @@ trait InteractsWithRevolut
         $value = $billable->getAttribute($key);
 
         return is_string($value) ? $value : null;
-    }
-
-    /**
-     * Persist the Revolut customer id on the billable model.
-     */
-    protected function persistCustomerId(Model $billable, string $customerId): void
-    {
-        $billable->forceFill(['revolut_customer_id' => $customerId])->save();
     }
 
     /**

@@ -10,6 +10,7 @@ use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\ServiceProvider;
 use Isapp\CashierRevolut\Commands\WebhookCommand;
 use Isapp\CashierRevolut\Http\RevolutConnector;
+use Isapp\CashierRevolut\Models\RevolutCustomer;
 use Isapp\CashierRevolut\Models\RevolutInvoice;
 use Isapp\CashierRevolut\Models\RevolutSubscription;
 use Isapp\CashierRevolut\Models\RevolutSubscriptionItem;
@@ -46,6 +47,7 @@ class CashierRevolutServiceProvider extends ServiceProvider
         // Register this driver's model classes in the per-driver registry —
         // safe alongside other drivers and app-published config.
         Cashier::useModels(RevolutGateway::DRIVER, [
+            'customer' => RevolutCustomer::class,
             'subscription' => RevolutSubscription::class,
             'subscription_item' => RevolutSubscriptionItem::class,
             'invoice' => RevolutInvoice::class,
@@ -68,10 +70,6 @@ class CashierRevolutServiceProvider extends ServiceProvider
             $this->publishes([
                 __DIR__.'/../lang' => $this->app->langPath('vendor/cashier-revolut'),
             ], 'cashier-revolut-lang');
-
-            $this->publishesMigrations([
-                __DIR__.'/../database/migrations' => database_path('migrations'),
-            ], 'cashier-revolut-migrations');
 
             $this->commands([
                 WebhookCommand::class,

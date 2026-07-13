@@ -30,6 +30,7 @@ use Isapp\CashierSupport\Events\SubscriptionPastDue;
 use Isapp\CashierSupport\Events\SubscriptionRenewed;
 use Isapp\CashierSupport\Events\SubscriptionUpdated;
 use Isapp\CashierSupport\Facades\Cashier;
+use Isapp\CashierSupport\Gateway\ManagesCustomerRecords;
 use Isapp\CashierSupport\Models\Invoice as InvoiceRecord;
 use Isapp\CashierSupport\Models\Subscription as SubscriptionRecord;
 use Psr\Log\LoggerInterface;
@@ -53,6 +54,7 @@ use Throwable;
  */
 class RevolutWebhookSynchronizer
 {
+    use ManagesCustomerRecords;
     use PersistsRevolutPlanVariation;
 
     public function __construct(
@@ -429,13 +431,12 @@ class RevolutWebhookSynchronizer
      */
     private function resolveOwner(?string $customerId): ?Model
     {
-        $class = $this->config->get('cashier-revolut.billable_model');
+        return $this->resolveOwnerByCustomerId($customerId);
+    }
 
-        if ($customerId === null || ! is_string($class) || ! is_subclass_of($class, Model::class)) {
-            return null;
-        }
-
-        return $class::query()->where('revolut_customer_id', $customerId)->first();
+    protected function driverName(): string
+    {
+        return RevolutGateway::DRIVER;
     }
 
     private function customerIdFromRaw(mixed $json): ?string

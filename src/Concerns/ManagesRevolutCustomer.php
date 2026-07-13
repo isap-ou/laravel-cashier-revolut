@@ -29,7 +29,7 @@ trait ManagesRevolutCustomer
             $this->revolut()->post('/customers', $request->payload())->json() ?? [],
         )->toCustomer());
 
-        $this->persistCustomerId($billable, $customer->id);
+        $this->persistCustomerId($billable, $customer->id, $customer->name, $customer->email);
 
         return $customer;
     }
