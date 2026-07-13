@@ -96,9 +96,22 @@ is `cycle_billing`. That is the moment the new variation actually takes effect.
 **Webhooks must be configured for this to work** — without them the local item
 row keeps naming the old variation indefinitely.
 
-`SubscriptionUpdated` is dispatched twice over a swap's life: once when it is
-scheduled, and once when it lands on the paid renewal. Distinguish them by the
-plan the subscription is actually billed on.
+The scheduled change is not lost: Revolut reports it back as `scheduled_action`,
+and the driver records it as the subscription's **pending price** — the gateway's
+own fact, not our memory of what was requested:
+
+```php
+$subscription = $user->subscription('default');
+
+$subscription->hasPendingPriceChange();  // true
+$subscription->pendingPrice();           // the plan variation it moves to
+$subscription->pendingPriceStartsAt();   // the end of the current cycle
+```
+
+`SubscriptionPriceChangeScheduled` fires when the change is scheduled;
+`SubscriptionUpdated` fires when it **lands**, on the paid renewal. A listener
+that provisions entitlements must use the second one — the first describes a
+state that is not true yet.
 
 Every sync path writes the local item row, so `subscribedToPrice()` works for any
 subscription the driver sees — including one it did not create.
@@ -128,7 +141,9 @@ $user->swapSubscription('default', $newPlanVariationId, SwapTiming::AtPeriodEnd,
 ]);
 ```
 
-`SubscriptionUpdated` is dispatched on a successful swap.
+`SubscriptionPriceChangeScheduled` is dispatched on a successful swap — the change
+is scheduled, not applied. `SubscriptionUpdated` follows later, when the paid
+renewal lands it.
 
 ## Checkout Widget
 

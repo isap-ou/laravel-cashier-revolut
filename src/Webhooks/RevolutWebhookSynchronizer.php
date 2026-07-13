@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Isapp\CashierRevolut\Webhooks;
 
+use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\PendingRequest;
@@ -163,6 +164,11 @@ class RevolutWebhookSynchronizer
         // unchanged-status short-circuit so it is not skipped.
         $this->persistPlanVariation($record, $response->planVariationId);
 
+        // And the change Revolut has scheduled but not applied — including one
+        // made in the Revolut dashboard, which the app never asked for and would
+        // otherwise never learn about.
+        $this->persistPendingPrice($record, $response->pendingPlanVariationId(), $cycle?->endDate);
+
         $owner = $record->owner()->first();
 
         if (! $owner instanceof Model || $previousStatus === $status) {
@@ -187,6 +193,24 @@ class RevolutWebhookSynchronizer
             // event — dunning and suspension deserve a signal of their own.
             default => new SubscriptionPastDue($owner, $subscription),
         });
+    }
+
+    /**
+     * Record the plan variation the subscription will move to at cycle end, or
+     * clear it when Revolut no longer has one scheduled.
+     *
+     * A null date is "the cycle could not be read" — cycle() tolerates a 404 by
+     * design — and not "there is no date". It leaves the recorded one alone, or a
+     * transient failure would downgrade a dated pending change into an undated one.
+     */
+    private function persistPendingPrice(SubscriptionRecord $record, ?string $planVariationId, ?CarbonImmutable $startsAt): void
+    {
+        $record->forceFill([
+            'next_price' => $planVariationId,
+            ...($planVariationId === null
+                ? ['next_price_starts_at' => null]
+                : ($startsAt !== null ? ['next_price_starts_at' => $startsAt] : [])),
+        ])->save();
     }
 
     /**
@@ -310,6 +334,12 @@ class RevolutWebhookSynchronizer
         }
 
         $this->persistPlanVariation($record, $response->planVariationId);
+
+        // Whatever Revolut still has scheduled — normally nothing, because the
+        // renewal is exactly when a scheduled change lands. Writing what Revolut
+        // reports (rather than blindly clearing) keeps a second, still-pending
+        // change visible instead of silently dropping it.
+        $this->persistPendingPrice($record, $response->pendingPlanVariationId(), $cycle?->endDate);
 
         $invoice->forceFill([
             'subscription_id' => $record->getKey(),
