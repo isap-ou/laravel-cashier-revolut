@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `cancelSubscription()` now returns a `Subscription` DTO carrying `endsAt`. The
+  grace period was written to the local record but dropped from the returned
+  DTO — which is the contract's declared return type, so an app rendering the
+  cancellation from it told the customer access had ended immediately while they
+  had in fact paid through the end of the billing cycle. `toSubscription()` takes
+  the date from the caller because Revolut's subscription resource has no end
+  date to map from: it lives on the active billing cycle.
 - `refund()` now dispatches `RefundProcessed`. `Capability::Refunds` was
   declared and the API call worked, but the lifecycle event was never fired, so
   an app listening for refunds through the provider-agnostic API got nothing.

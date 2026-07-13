@@ -156,6 +156,11 @@ class RevolutGatewayTest extends TestCase
         $record = RevolutSubscription::query()->firstOrFail();
         $this->assertSame('2099-08-01T00:00:00+00:00', $record->ends_at?->toIso8601String());
         $this->assertTrue($user->subscribed('default'));
+
+        // ...and so does the RETURNED DTO. It is the contract's declared return
+        // type — an app that renders the cancellation from it must not be told
+        // access ended immediately while the customer has paid through the cycle.
+        $this->assertSame('2099-08-01T00:00:00+00:00', $canceled->endsAt?->toIso8601String());
     }
 
     public function test_it_throws_for_unsupported_subscription_operations(): void

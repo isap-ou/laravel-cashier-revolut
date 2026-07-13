@@ -46,13 +46,21 @@ class SubscriptionResponse extends Data
         return $this->subscriptionState()?->toSubscriptionStatus() ?? SubscriptionStatus::Incomplete;
     }
 
-    public function toSubscription(string $type): Subscription
+    /**
+     * @param  CarbonImmutable|null  $endsAt  When access ends. Supplied by the
+     *                                        caller: the Revolut subscription
+     *                                        resource carries no such field —
+     *                                        the paid-through date lives on the
+     *                                        active billing cycle.
+     */
+    public function toSubscription(string $type, ?CarbonImmutable $endsAt = null): Subscription
     {
         return new Subscription(
             id: $this->id,
             type: $type,
             status: $this->status(),
             trialEndsAt: $this->trialEndDate,
+            endsAt: $endsAt,
             createdAt: $this->createdAt,
         );
     }
