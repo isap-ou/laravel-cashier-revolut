@@ -150,6 +150,15 @@ $session = $user->checkout(CheckoutRequest::forAmount(
 ));
 ```
 
+An order is a one-off payment: `POST /orders` carries no mode, and a Revolut
+subscription is created through the subscriptions API. Any `CheckoutMode` other
+than `Payment` therefore raises `UnsupportedOperationException` rather than
+quietly becoming an order that never renews. Order `metadata` is validated
+against Revolut's restrictions before the call (string values only, at most 50
+pairs, values up to 500 characters, keys `^[a-zA-Z][a-zA-Z\d_]{0,39}$`) — a
+violation is named as an `InvalidArgumentException` instead of coming back as an
+opaque 400.
+
 `checkout()` creates a Revolut order and returns a `RevolutCheckoutSession`
 carrying the order `token` for the [Revolut Checkout Widget](https://developer.revolut.com/docs/sdks/merchant-web-sdk/initialize-widget/revolut-checkout)
 and the hosted `url`. The token is also what `clientSecret()` returns — the

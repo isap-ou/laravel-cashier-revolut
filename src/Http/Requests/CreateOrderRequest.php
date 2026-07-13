@@ -20,7 +20,7 @@ class CreateOrderRequest extends RevolutRequest
         public int $amount,
         public string $currency,
         public string $captureMode = 'automatic',
-        public ?string $customerId = null,
+        public ?OrderCustomerRequest $customer = null,
         public ?string $redirectUrl = null,
         public ?string $description = null,
         public ?array $metadata = null,

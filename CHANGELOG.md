@@ -77,6 +77,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An order never linked to its customer.** The order body sent a flat
+  `customer_id`, which `POST /api/orders` does not define — the customer is a nested
+  `customer` object. Revolut ignored the field, so every order (checkout *and*
+  charge) was created attached to nobody: the widget offered no saved card, and the
+  card used to pay was never attached to the customer record, leaving a later
+  `charge($amount, $savedPaymentMethodId)` with no payment method to reach for.
+
 - **The driver was sending a `quantity` field Revolut does not accept.**
   `POST /api/subscriptions` documents exactly five fields, and `quantity` is not
   among them — a Revolut subscription has no per-customer quantity at all. It

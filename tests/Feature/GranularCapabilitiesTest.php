@@ -11,6 +11,7 @@ use Isapp\CashierRevolut\Tests\Fixtures\User;
 use Isapp\CashierRevolut\Tests\TestCase;
 use Isapp\CashierSupport\DTO\CheckoutRequest;
 use Isapp\CashierSupport\Enums\Capability;
+use Isapp\CashierSupport\Enums\CheckoutMode;
 use Isapp\CashierSupport\Enums\Currency;
 use Isapp\CashierSupport\Enums\SwapTiming;
 use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
@@ -171,6 +172,81 @@ class GranularCapabilitiesTest extends TestCase
         ));
 
         Http::assertSent(fn ($request) => $request->data()['metadata'] === ['user_id' => '42']);
+    }
+
+    public function test_the_order_links_the_customer_through_the_nested_object_the_api_defines(): void
+    {
+        // POST /orders has no top-level customer_id — the customer is a nested
+        // object. Sending the flat key left every order attached to nobody: the
+        // widget offered no saved card, and the card used was never linked to
+        // the customer, so a later charge had no payment method to reach for.
+        $this->fakeRevolut();
+
+        User::asRevolutCustomer('cus_1')->checkout(
+            CheckoutRequest::forAmount(1500, Currency::EUR),
+        );
+
+        Http::assertSent(function ($request): bool {
+            $body = $request->data();
+
+            return $body['customer'] === ['id' => 'cus_1']
+                && ! array_key_exists('customer_id', $body);
+        });
+    }
+
+    public function test_a_charge_links_its_customer_the_same_way(): void
+    {
+        // The order body is shared with charge(), so the flat customer_id
+        // detached those orders too.
+        Http::fake([
+            '*/orders/*/payments' => Http::response(['id' => 'pay_1', 'state' => 'authorised']),
+            '*/orders/ord_1' => Http::response([
+                'id' => 'ord_1', 'amount' => 1500, 'currency' => 'EUR', 'state' => 'completed',
+            ]),
+            '*/orders' => Http::response([
+                'id' => 'ord_1', 'amount' => 1500, 'currency' => 'EUR', 'state' => 'pending',
+            ]),
+        ]);
+
+        User::asRevolutCustomer('cus_1')->charge(1500, 'pm_1');
+
+        Http::assertSent(function ($request): bool {
+            if (! str_ends_with($request->url(), '/orders')) {
+                return true;
+            }
+
+            return $request->data()['customer'] === ['id' => 'cus_1'];
+        });
+    }
+
+    public function test_a_mode_an_order_cannot_carry_is_refused_not_downgraded(): void
+    {
+        // An order is a one-off payment; POST /orders has no mode at all, and a
+        // Revolut subscription is created through the subscriptions API. Silently
+        // downgrading would hand the app a session reporting Subscription over an
+        // order that will never renew.
+        $this->fakeRevolut();
+
+        $this->expectException(UnsupportedOperationException::class);
+        User::asRevolutCustomer('cus_1')->checkout(CheckoutRequest::forAmount(
+            amount: 1500,
+            currency: Currency::EUR,
+            mode: CheckoutMode::Subscription,
+        ));
+    }
+
+    public function test_a_metadata_key_with_a_trailing_newline_is_refused(): void
+    {
+        // PCRE's $ matches before a trailing newline, so an unanchored pattern
+        // would pass "user_id\n" straight through to a 400.
+        $this->fakeRevolut();
+
+        $this->expectException(InvalidArgumentException::class);
+        User::asRevolutCustomer('cus_1')->checkout(CheckoutRequest::forAmount(
+            amount: 1500,
+            currency: Currency::EUR,
+            metadata: ["user_id\n" => '42'],
+        ));
     }
 
     public function test_an_amount_checkout_creates_an_order_and_exposes_its_token(): void

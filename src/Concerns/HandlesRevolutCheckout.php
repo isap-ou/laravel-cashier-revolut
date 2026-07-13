@@ -8,10 +8,12 @@ use Illuminate\Database\Eloquent\Model;
 use InvalidArgumentException;
 use Isapp\CashierRevolut\Checkout\RevolutCheckoutSession;
 use Isapp\CashierRevolut\Http\Requests\CreateOrderRequest;
+use Isapp\CashierRevolut\Http\Requests\OrderCustomerRequest;
 use Isapp\CashierRevolut\Http\Responses\OrderResponse;
 use Isapp\CashierSupport\Contracts\CheckoutSession;
 use Isapp\CashierSupport\DTO\CheckoutRequest;
 use Isapp\CashierSupport\Enums\Capability;
+use Isapp\CashierSupport\Enums\CheckoutMode;
 use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
 
 /**
@@ -20,12 +22,16 @@ use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
  * Revolut checks out an amount, not a catalogue of price identifiers — which is
  * what Capability::CheckoutAmount says, so a price-shaped request is refused by
  * the support package before it ever reaches this trait. The amount is a typed
- * field of the request now, not an undocumented key in an options bag, and this
- * trait no longer throws an exception of its own.
+ * field of the request now, not an undocumented key in an options bag.
  *
  * Revolut's order carries a single `redirect_url` and no cancel destination, so
- * the request's cancelUrl has no counterpart and is not sent; the mode travels
- * on the returned session, not on the order.
+ * the request's cancelUrl has no counterpart and is not sent. An order is always
+ * a one-off payment, so any mode other than CheckoutMode::Payment is refused
+ * rather than quietly downgraded.
+ *
+ * It does throw for a request Revolut itself would reject — a metadata pair that
+ * breaks the API's restrictions — but as an InvalidArgumentException naming the
+ * violation, the way the reference Cashier packages report a malformed argument.
  */
 trait HandlesRevolutCheckout
 {
@@ -41,6 +47,17 @@ trait HandlesRevolutCheckout
         // which skips the named constructors, gets validated.
         if ($request->capability() !== Capability::CheckoutAmount) {
             throw UnsupportedOperationException::forCapability(Capability::CheckoutPrices);
+        }
+
+        // An order is a one-off payment: POST /orders has no mode of any kind,
+        // and a Revolut subscription is created through the subscriptions API,
+        // not by checking out in a different mode. Downgrading the mode silently
+        // would hand the app a session that says Subscription over an order that
+        // will never renew.
+        if ($request->mode !== CheckoutMode::Payment) {
+            throw new UnsupportedOperationException(
+                "Revolut's checkout creates a payment order; the [{$request->mode->value}] mode is not supported.",
+            );
         }
 
         $order = $this->guardConnection(
@@ -59,15 +76,20 @@ trait HandlesRevolutCheckout
 
     private function orderFor(Model $billable, CheckoutRequest $request): CreateOrderRequest
     {
+        $customerId = $this->customerIdOrNull($billable);
         $currency = $request->currency;
 
+        if ($currency === null) {
+            throw new InvalidArgumentException(
+                'A checkout request carrying an amount must carry the currency it is in.',
+            );
+        }
+
         return new CreateOrderRequest(
-            // Guaranteed non-null and positive by the capability() check above.
+            // Amount is guaranteed non-null and positive by capability().
             amount: (int) $request->amount,
-            // A request built through Data::from() can carry an amount with no
-            // currency; fall back to the configured one, as a charge does.
-            currency: $currency !== null ? $currency->value : $this->currencyFromOptions($request->options),
-            customerId: $this->customerIdOrNull($billable),
+            currency: $currency->value,
+            customer: $customerId !== null ? new OrderCustomerRequest($customerId) : null,
             redirectUrl: $request->successUrl,
             description: $request->description,
             metadata: $this->orderMetadata($request->metadata),
@@ -105,7 +127,9 @@ trait HandlesRevolutCheckout
         $accepted = [];
 
         foreach ($metadata as $key => $value) {
-            if (preg_match('/^[a-zA-Z][a-zA-Z\d_]{0,39}$/', (string) $key) !== 1) {
+            // The D modifier matters: without it `$` also matches before a
+            // trailing newline, so "user_id\n" would sail through and 400.
+            if (preg_match('/^[a-zA-Z][a-zA-Z\d_]{0,39}$/D', (string) $key) !== 1) {
                 throw new InvalidArgumentException(
                     "Revolut metadata key [{$key}] must start with a letter and contain only letters, digits and underscores, up to 40 characters.",
                 );
