@@ -42,7 +42,7 @@ trait HandlesRevolutCheckout
         $request = new CreateOrderRequest(
             amount: $amount,
             currency: $this->currencyFromOptions($options),
-            customerId: $this->stringAttribute($billable, 'revolut_customer_id'),
+            customerId: $this->customerIdOrNull($billable),
             redirectUrl: is_string($redirect) ? $redirect : null,
         );
 

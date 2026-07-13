@@ -42,11 +42,19 @@ abstract class TestCase extends Orchestra
 
     protected function defineDatabaseMigrations(): void
     {
+        // No driver-named column: the customer identity lives in the support
+        // package's cashier_customers table, loaded below.
         Schema::create('users', function (Blueprint $table): void {
             $table->id();
             $table->string('name')->nullable();
             $table->string('email')->nullable();
-            $table->string('revolut_customer_id')->nullable();
+            $table->timestamps();
+        });
+
+        // A second billable type, to prove an order webhook can resolve one.
+        Schema::create('teams', function (Blueprint $table): void {
+            $table->id();
+            $table->string('name')->nullable();
             $table->timestamps();
         });
 

@@ -46,6 +46,7 @@ src/
 │   └── HandlesRevolutCheckout.php
 │
 ├── Models/                         # Concrete Eloquent models
+│   ├── RevolutCustomer.php         # extends abstract Customer from support
 │   ├── RevolutSubscription.php     # extends abstract Subscription from support
 │   └── RevolutSubscriptionItem.php
 │
@@ -68,7 +69,8 @@ src/
 │   └── migrations/
 │       ├── create_revolut_customers_table.php
 │       ├── create_revolut_subscriptions_table.php
-│       └── add_revolut_columns_to_users_table.php
+│       └── (none — the customer identity lives in the support package's
+│            cashier_customers table, not in a column on the app's users table)
 │
 └── routes/
     └── webhook.php

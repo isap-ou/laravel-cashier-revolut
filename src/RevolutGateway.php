@@ -15,6 +15,7 @@ use Isapp\CashierRevolut\Http\RevolutConnector;
 use Isapp\CashierRevolut\Webhooks\RevolutWebhookHandler;
 use Isapp\CashierSupport\Contracts\GatewayProvider;
 use Isapp\CashierSupport\Enums\Capability;
+use Isapp\CashierSupport\Gateway\ManagesCustomerRecords;
 use Isapp\CashierSupport\Gateway\ManagesLocalInvoices;
 use Isapp\CashierSupport\Invoice\InvoiceRenderer;
 
@@ -31,6 +32,7 @@ class RevolutGateway implements GatewayProvider
     use HandlesRevolutCheckout;
     use HandlesRevolutWebhooks;
     use InteractsWithRevolut;
+    use ManagesCustomerRecords;
     use ManagesLocalInvoices;
     use ManagesRevolutCustomer;
     use ManagesRevolutPaymentMethods;

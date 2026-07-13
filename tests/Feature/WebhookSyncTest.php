@@ -10,6 +10,7 @@ use Isapp\CashierRevolut\Models\RevolutInvoice;
 use Isapp\CashierRevolut\Models\RevolutSubscription;
 use Isapp\CashierRevolut\Models\RevolutSubscriptionItem;
 use Isapp\CashierRevolut\Tests\Fixtures\RevolutApi;
+use Isapp\CashierRevolut\Tests\Fixtures\Team;
 use Isapp\CashierRevolut\Tests\Fixtures\User;
 use Isapp\CashierRevolut\Tests\TestCase;
 use Isapp\CashierRevolut\Webhooks\RevolutWebhookHandler;
@@ -29,13 +30,6 @@ use Isapp\CashierSupport\Facades\Cashier;
 
 class WebhookSyncTest extends TestCase
 {
-    protected function defineEnvironment($app): void
-    {
-        parent::defineEnvironment($app);
-
-        $app['config']->set('cashier-revolut.billable_model', User::class);
-    }
-
     private function synchronizer(): RevolutWebhookSynchronizer
     {
         return $this->app->make(RevolutWebhookSynchronizer::class);
@@ -56,7 +50,7 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         RevolutSubscription::query()->create([
             'owner_type' => $user->getMorphClass(),
@@ -97,7 +91,7 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         $subscription = RevolutSubscription::query()->create([
             'owner_type' => $user->getMorphClass(),
@@ -149,7 +143,7 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         RevolutSubscription::query()->create([
             'owner_type' => $user->getMorphClass(),
@@ -196,7 +190,7 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         $subscription = RevolutSubscription::query()->create([
             'owner_type' => $user->getMorphClass(),
@@ -253,7 +247,7 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         RevolutSubscription::query()->create([
             'owner_type' => $user->getMorphClass(),
@@ -290,7 +284,7 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         RevolutSubscription::query()->create([
             'owner_type' => $user->getMorphClass(),
@@ -321,7 +315,7 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         RevolutSubscription::query()->create([
             'owner_type' => $user->getMorphClass(),
@@ -360,7 +354,7 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         $subscription = RevolutSubscription::query()->create([
             'owner_type' => $user->getMorphClass(),
@@ -404,7 +398,7 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         $subscription = RevolutSubscription::query()->create([
             'owner_type' => $user->getMorphClass(),
@@ -447,7 +441,7 @@ class WebhookSyncTest extends TestCase
             '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(['message' => 'Gone.'], 404),
         ]);
 
-        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         RevolutSubscription::query()->create([
             'owner_type' => $user->getMorphClass(),
@@ -477,7 +471,7 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
 
@@ -513,13 +507,33 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         $payload = $this->payload('ORDER_COMPLETED');
         $this->synchronizer()->handle($payload);
         $this->synchronizer()->handle($payload);
 
         $this->assertDatabaseCount('cashier_invoices', 1);
+    }
+
+    public function test_an_order_webhook_resolves_a_billable_of_any_type(): void
+    {
+        // The old reverse lookup searched a single configured class, so an order
+        // for a Team found nothing and its invoice was silently dropped.
+        RevolutApi::fake([
+            '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order([
+                'state' => 'completed',
+                'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+            ])),
+        ]);
+
+        $team = Team::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
+
+        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
+
+        $invoice = RevolutInvoice::query()->firstOrFail();
+        $this->assertSame($team->getMorphClass(), $invoice->owner_type);
+        $this->assertTrue($invoice->owner()->first()?->is($team));
     }
 
     public function test_an_order_without_a_resolvable_owner_is_skipped(): void
@@ -541,7 +555,7 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         RevolutSubscription::query()->create([
             'owner_type' => $user->getMorphClass(),
@@ -574,7 +588,7 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
 
@@ -592,7 +606,7 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         $payload = $this->payload('ORDER_COMPLETED');
         $this->synchronizer()->handle($payload);
@@ -612,7 +626,7 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         $this->synchronizer()->handle($this->payload('ORDER_PAYMENT_DECLINED'));
 
@@ -643,7 +657,7 @@ class WebhookSyncTest extends TestCase
             ])),
         ]);
 
-        $user = User::query()->create(['name' => 'Ada', 'revolut_customer_id' => RevolutApi::CUSTOMER_ID]);
+        $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         RevolutSubscription::query()->create([
             'owner_type' => $user->getMorphClass(),

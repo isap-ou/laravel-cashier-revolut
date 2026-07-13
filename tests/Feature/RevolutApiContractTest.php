@@ -37,10 +37,9 @@ class RevolutApiContractTest extends TestCase
 
     private function customer(): User
     {
-        return User::query()->create([
+        return User::asRevolutCustomer(RevolutApi::CUSTOMER_ID, [
             'name' => 'Example Customer',
             'email' => 'example.customer@example.com',
-            'revolut_customer_id' => RevolutApi::CUSTOMER_ID,
         ]);
     }
 
@@ -119,7 +118,7 @@ class RevolutApiContractTest extends TestCase
         $this->assertSame(RevolutApi::CUSTOMER_ID, $customer->id);
         $this->assertSame('Example Customer', $customer->name);
         $this->assertSame('example.customer@example.com', $customer->email);
-        $this->assertSame(RevolutApi::CUSTOMER_ID, $user->refresh()->revolut_customer_id);
+        $this->assertSame(RevolutApi::CUSTOMER_ID, $user->customerId());
     }
 
     /**

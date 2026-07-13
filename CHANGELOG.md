@@ -41,6 +41,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   event.
 - Requires `isapp/laravel-cashier-support` ^1.0.
 
+### Changed
+
+- **The Revolut customer id no longer lives on the app's users table.** It is a
+  row in the support package's `cashier_customers` (morphed owner + provider +
+  provider_id), so `users.revolut_customer_id`, its migration, and the
+  `billable_model` config key are all gone — and this package now ships no
+  migrations at all.
+
+  The old column forbade polymorphism structurally: an order webhook resolved its
+  owner through a **single configured billable class**, so a Team could not be
+  billed alongside a User — its order resolved no owner and its invoice was
+  silently dropped. The reverse lookup is now polymorphic and finds any billable
+  type, which is what let `billable_model` be deleted rather than merely
+  deprecated.
+
+  An app reads the id with `$user->customerId()` — provider-neutral — instead of
+  `$user->revolut_customer_id`.
+
 ### Fixed
 
 - **The driver was sending a `quantity` field Revolut does not accept.**

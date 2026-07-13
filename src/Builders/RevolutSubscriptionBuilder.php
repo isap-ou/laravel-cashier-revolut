@@ -16,9 +16,9 @@ use Isapp\CashierRevolut\RevolutGateway;
 use Isapp\CashierSupport\Contracts\SubscriptionBuilder;
 use Isapp\CashierSupport\DTO\Subscription;
 use Isapp\CashierSupport\Enums\Capability;
-use Isapp\CashierSupport\Exceptions\CustomerNotFoundException;
 use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
 use Isapp\CashierSupport\Facades\Cashier;
+use Isapp\CashierSupport\Gateway\ManagesCustomerRecords;
 use Spatie\LaravelData\Exceptions\CannotCastDate;
 use Spatie\LaravelData\Exceptions\CannotCreateData;
 use TypeError;
@@ -30,6 +30,7 @@ use TypeError;
  */
 class RevolutSubscriptionBuilder implements SubscriptionBuilder
 {
+    use ManagesCustomerRecords;
     use PersistsRevolutPlanVariation;
 
     private ?string $trialDuration = null;
@@ -128,15 +129,14 @@ class RevolutSubscriptionBuilder implements SubscriptionBuilder
         return $this->create(null, $options);
     }
 
+    protected function driverName(): string
+    {
+        return RevolutGateway::DRIVER;
+    }
+
     private function customerId(): string
     {
-        $id = $this->billable->getAttribute('revolut_customer_id');
-
-        if (! is_string($id) || $id === '') {
-            throw CustomerNotFoundException::notCreated();
-        }
-
-        return $id;
+        return $this->customerIdFor($this->billable);
     }
 
     private function persist(Subscription $subscription, ?string $planVariationId): void

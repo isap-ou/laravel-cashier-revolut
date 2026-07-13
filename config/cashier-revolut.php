@@ -56,19 +56,6 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Billable model
-    |--------------------------------------------------------------------------
-    |
-    | The Eloquent model carrying the revolut_customer_id column. Used by the
-    | webhook synchronizer to resolve which entity an order event belongs to
-    | (subscription events resolve their owner from the local record instead).
-    | When null, order webhooks are acknowledged but no invoice is recorded.
-    |
-    */
-    'billable_model' => env('CASHIER_BILLABLE_MODEL'),
-
-    /*
-    |--------------------------------------------------------------------------
     | HTTP client
     |--------------------------------------------------------------------------
     */
