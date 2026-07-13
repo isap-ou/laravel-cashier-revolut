@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Isapp\CashierRevolut\Concerns;
 
 use Illuminate\Database\Eloquent\Model;
+use InvalidArgumentException;
 use Isapp\CashierRevolut\Checkout\RevolutCheckoutSession;
 use Isapp\CashierRevolut\Http\Requests\CreateOrderRequest;
 use Isapp\CashierRevolut\Http\Responses\OrderResponse;
@@ -69,7 +70,62 @@ trait HandlesRevolutCheckout
             customerId: $this->customerIdOrNull($billable),
             redirectUrl: $request->successUrl,
             description: $request->description,
-            metadata: $request->metadata === [] ? null : $request->metadata,
+            metadata: $this->orderMetadata($request->metadata),
         );
+    }
+
+    /**
+     * Metadata Revolut will actually accept, or a clear failure before the call.
+     *
+     * The API constrains it far more tightly than a PHP array: string keys and
+     * string values only, no nulls, at most 50 pairs, values up to 500 chars, and
+     * keys matching ^[a-zA-Z][a-zA-Z\d_]{0,39}$. Forwarding e.g. an int user id
+     * would come back as an opaque 400 wrapped in a generic API failure, so the
+     * violation is named here, before any HTTP.
+     *
+     * @see https://developer.revolut.com/docs/api/merchant/operations/create-order.md
+     *
+     * @param  array<string, mixed>  $metadata
+     * @return array<string, string>|null
+     *
+     * @throws InvalidArgumentException When a pair breaks a documented restriction.
+     */
+    private function orderMetadata(array $metadata): ?array
+    {
+        if ($metadata === []) {
+            return null;
+        }
+
+        if (count($metadata) > 50) {
+            throw new InvalidArgumentException(
+                'Revolut accepts at most 50 metadata pairs on an order; got ['.count($metadata).'].',
+            );
+        }
+
+        $accepted = [];
+
+        foreach ($metadata as $key => $value) {
+            if (preg_match('/^[a-zA-Z][a-zA-Z\d_]{0,39}$/', (string) $key) !== 1) {
+                throw new InvalidArgumentException(
+                    "Revolut metadata key [{$key}] must start with a letter and contain only letters, digits and underscores, up to 40 characters.",
+                );
+            }
+
+            if (! is_string($value)) {
+                throw new InvalidArgumentException(
+                    "Revolut metadata value for [{$key}] must be a string; got [".get_debug_type($value).'].',
+                );
+            }
+
+            if (mb_strlen($value) > 500) {
+                throw new InvalidArgumentException(
+                    "Revolut metadata value for [{$key}] must be at most 500 characters.",
+                );
+            }
+
+            $accepted[(string) $key] = $value;
+        }
+
+        return $accepted;
     }
 }

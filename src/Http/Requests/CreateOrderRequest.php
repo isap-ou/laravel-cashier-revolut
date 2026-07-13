@@ -14,7 +14,7 @@ use Spatie\LaravelData\Mappers\SnakeCaseMapper;
 class CreateOrderRequest extends RevolutRequest
 {
     /**
-     * @param  array<string, mixed>|null  $metadata
+     * @param  array<string, string>|null  $metadata  Revolut accepts string values only.
      */
     public function __construct(
         public int $amount,

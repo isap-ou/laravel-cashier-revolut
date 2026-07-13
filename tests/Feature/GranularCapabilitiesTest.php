@@ -137,6 +137,42 @@ class GranularCapabilitiesTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_metadata_revolut_would_reject_fails_before_the_call_not_as_an_opaque_400(): void
+    {
+        // Revolut's order metadata takes string values only (and caps keys,
+        // lengths and pair count). An int user id would come back as a bare 400
+        // wrapped in a generic API failure — name the violation instead.
+        $this->fakeRevolut();
+
+        $user = User::asRevolutCustomer('cus_1');
+
+        try {
+            $user->checkout(CheckoutRequest::forAmount(
+                amount: 1500,
+                currency: Currency::EUR,
+                metadata: ['user_id' => 42],
+            ));
+            $this->fail('A non-string metadata value must not be sent.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertStringContainsString('must be a string', $exception->getMessage());
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public function test_metadata_revolut_accepts_is_sent_with_the_order(): void
+    {
+        $this->fakeRevolut();
+
+        User::asRevolutCustomer('cus_1')->checkout(CheckoutRequest::forAmount(
+            amount: 1500,
+            currency: Currency::EUR,
+            metadata: ['user_id' => '42'],
+        ));
+
+        Http::assertSent(fn ($request) => $request->data()['metadata'] === ['user_id' => '42']);
+    }
+
     public function test_an_amount_checkout_creates_an_order_and_exposes_its_token(): void
     {
         $this->fakeRevolut();
