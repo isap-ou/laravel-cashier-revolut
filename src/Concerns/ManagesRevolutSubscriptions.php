@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Isapp\CashierRevolut\Concerns;
 
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use InvalidArgumentException;
 use Isapp\CashierRevolut\Builders\RevolutSubscriptionBuilder;
@@ -61,7 +62,7 @@ trait ManagesRevolutSubscriptions
         // end_date. Grab it before cancelling (the spec does not guarantee the
         // cycle survives cancellation) so the local record keeps a real
         // paid-through grace period instead of ending access instantly.
-        [$subscription, $paidThrough] = $this->guardConnection(function () use ($id, $type): array {
+        [$subscription, $endsAt] = $this->guardConnection(function () use ($id, $type): array {
             $current = SubscriptionResponse::from(
                 $this->revolut()->get("/subscriptions/{$id}")->json() ?? [],
             );
@@ -74,14 +75,20 @@ trait ManagesRevolutSubscriptions
                 )->endDate;
             }
 
-            $subscription = $this->cancelAndRefetch($id, $type);
+            $endsAt = $paidThrough ?? CarbonImmutable::now();
 
-            return [$subscription, $paidThrough];
+            // The returned DTO must carry the same grace period the record
+            // gets. It is the contract's declared return type: an app that
+            // renders the cancellation from it would otherwise tell the
+            // customer access ended now, while they have paid through the cycle.
+            $subscription = $this->cancelAndRefetch($id, $type, $endsAt);
+
+            return [$subscription, $endsAt];
         });
 
         $record->forceFill([
             'status' => $subscription->status,
-            'ends_at' => $paidThrough ?? now(),
+            'ends_at' => $endsAt,
         ])->save();
 
         return $subscription;
@@ -125,14 +132,18 @@ trait ManagesRevolutSubscriptions
 
     /**
      * Cancel (204 No Content) then refetch the subscription for its state.
+     *
+     * $endsAt is passed through because Revolut's subscription resource has no
+     * end date to map from — it lives on the billing cycle, fetched before the
+     * cancellation.
      */
-    private function cancelAndRefetch(string $id, string $type): Subscription
+    private function cancelAndRefetch(string $id, string $type, ?CarbonImmutable $endsAt = null): Subscription
     {
         $this->revolut()->post("/subscriptions/{$id}/cancel");
 
         return SubscriptionResponse::from(
             $this->revolut()->get("/subscriptions/{$id}")->json() ?? [],
-        )->toSubscription($type);
+        )->toSubscription($type, $endsAt);
     }
 
     private function subscriptionRecord(Model $billable, string $type): RevolutSubscription

@@ -141,7 +141,13 @@ class RevolutWebhookSynchronizer
             return;
         }
 
-        $subscription = $response->toSubscription((string) $record->getAttribute('type'));
+        // Carry the grace period just written to the record: the Revolut
+        // payload has no end date, and a listener revoking access reads the
+        // DTO, not the row.
+        $subscription = $response->toSubscription(
+            (string) $record->getAttribute('type'),
+            $record->ends_at,
+        );
 
         event(match ($event) {
             RevolutWebhookEvent::SubscriptionInitiated => new SubscriptionCreated($owner, $subscription),

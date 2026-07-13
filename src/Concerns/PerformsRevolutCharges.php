@@ -13,6 +13,7 @@ use Isapp\CashierRevolut\Http\Responses\RefundResponse;
 use Isapp\CashierSupport\DTO\Payment;
 use Isapp\CashierSupport\DTO\Refund;
 use Isapp\CashierSupport\Enums\PaymentStatus;
+use Isapp\CashierSupport\Events\RefundProcessed;
 use Isapp\CashierSupport\Exceptions\PaymentFailedException;
 
 /**
@@ -62,6 +63,22 @@ trait PerformsRevolutCharges
      * Currency is only sent alongside an explicit partial-refund amount (or
      * when the caller provides it); a full refund omits both and lets Revolut
      * refund the original order amount in its own currency.
+     *
+     * Dispatches RefundProcessed once Revolut has accepted the refund, and
+     * throws PaymentFailedException when it rejects it — the refund is an order
+     * in its own right, so a 2xx can still come back failed or cancelled
+     * (mirrors the state guard in charge()).
+     *
+     * "Accepted" is as far as this can go: the response is 201 "Refund order
+     * successfully created", and Revolut's webhook catalogue carries no refund
+     * event (Order, Payment, Subscription, Payout and Dispute only). Final
+     * settlement is therefore not observable, and neither is a refund issued
+     * from the Revolut dashboard.
+     *
+     * @throws PaymentFailedException When Revolut rejects the refund.
+     *
+     * @see https://developer.revolut.com/docs/api/merchant/operations/refund-order
+     * @see https://developer.revolut.com/docs/api/merchant/operations/create-webhook
      */
     public function refund(Model $billable, string $paymentId, array $options = []): Refund
     {
@@ -70,13 +87,21 @@ trait PerformsRevolutCharges
             ? $this->currencyFromOptions($options)
             : null;
 
-        return $this->guardConnection(function () use ($paymentId, $amount, $currency): Refund {
+        $refund = $this->guardConnection(function () use ($paymentId, $amount, $currency): Refund {
             $response = RefundResponse::from($this->revolut()->post(
                 "/orders/{$paymentId}/refund",
                 (new RefundOrderRequest($currency, $amount))->payload(),
             )->json() ?? []);
 
+            if ($response->failed()) {
+                throw PaymentFailedException::forPayment($response->id, 'The refund failed.');
+            }
+
             return $response->toRefund($paymentId);
         });
+
+        event(new RefundProcessed($billable, $refund));
+
+        return $refund;
     }
 }

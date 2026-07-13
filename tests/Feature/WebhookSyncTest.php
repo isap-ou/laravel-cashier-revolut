@@ -66,9 +66,12 @@ class WebhookSyncTest extends TestCase
         $this->assertSame(SubscriptionStatus::Canceled, $record->status);
         $this->assertNotNull($record->ends_at);
 
-        Event::assertDispatched(SubscriptionCanceled::class, function (SubscriptionCanceled $event) use ($user): bool {
+        Event::assertDispatched(SubscriptionCanceled::class, function (SubscriptionCanceled $event) use ($record, $user): bool {
             return $event->billable->is($user)
-                && $event->subscription->status === SubscriptionStatus::Canceled;
+                && $event->subscription->status === SubscriptionStatus::Canceled
+                // The event's DTO must carry the same grace period as the
+                // record. A listener revoking access reads the DTO, not the row.
+                && $event->subscription->endsAt?->toIso8601String() === $record->ends_at?->toIso8601String();
         });
 
         // The billable's query-side now reflects the cancellation.
