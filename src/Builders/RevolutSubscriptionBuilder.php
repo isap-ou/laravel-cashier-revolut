@@ -17,6 +17,7 @@ use Isapp\CashierRevolut\RevolutGateway;
 use Isapp\CashierSupport\Contracts\SubscriptionBuilder;
 use Isapp\CashierSupport\DTO\Subscription;
 use Isapp\CashierSupport\Enums\Capability;
+use Isapp\CashierSupport\Events\SubscriptionCreated;
 use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
 use Isapp\CashierSupport\Facades\Cashier;
 use Isapp\CashierSupport\Gateway\ManagesCustomerRecords;
@@ -179,6 +180,23 @@ class RevolutSubscriptionBuilder implements SubscriptionBuilder
         $subscription = $response->toSubscription($this->type);
 
         $this->persist($subscription, $response->planVariationId ?? $this->planVariationId);
+
+        // Announce it only if it is already live. Revolut creates a subscription
+        // `pending`, with a setup order the customer still has to pay in the
+        // Checkout Widget — announcing THAT would hand a listener a subscription
+        // nobody has paid for, and if the customer closes the widget, Revolut sends
+        // no webhook and nothing ever revokes the access. When the setup payment
+        // lands, SUBSCRIPTION_INITIATED announces it instead.
+        //
+        // A subscription that comes back live (a trial, a plan with no setup order)
+        // has no such webhook coming: the status never changes, so the synchronizer's
+        // transition guard would swallow it and it would be announced nowhere.
+        // isActive(), not "not pending": overdue, paused and cancelled are all
+        // "not pending" too, and none of them is a subscription to announce as
+        // freshly created.
+        if ($subscription->status->isActive()) {
+            event(new SubscriptionCreated($this->billable, $subscription));
+        }
 
         return $subscription;
     }

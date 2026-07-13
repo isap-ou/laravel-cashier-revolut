@@ -185,6 +185,12 @@ class RevolutWebhookSynchronizer
         );
 
         event(match ($event) {
+            // A Revolut subscription is born `pending` and becomes active when the
+            // customer pays its setup order. THAT is the birth worth announcing —
+            // announcing the POST would grant access to a customer who may never
+            // pay, and an abandoned setup produces no webhook to take it back.
+            // (A subscription that was live at creation is announced by the builder;
+            // its status never transitions, so it cannot be announced here.)
             RevolutWebhookEvent::SubscriptionInitiated => new SubscriptionCreated($owner, $subscription),
             RevolutWebhookEvent::SubscriptionCancelled,
             RevolutWebhookEvent::SubscriptionFinished => new SubscriptionCanceled($owner, $subscription),
