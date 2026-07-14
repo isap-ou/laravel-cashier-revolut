@@ -1,0 +1,23 @@
+* text=auto eol=lf
+
+# Exclude development-only files from the Composer dist archive.
+/.claude            export-ignore
+/.github            export-ignore
+/tests              export-ignore
+/CLAUDE.md          export-ignore
+/plan.md            export-ignore
+/RELEASING.md       export-ignore
+/.gitattributes     export-ignore
+/.gitignore         export-ignore
+/phpunit.xml        export-ignore
+/phpstan.neon       export-ignore
+/pint.json          export-ignore
+/graphify-out       export-ignore
+
+# graph.json is a large generated JSON: two branches touching it conflict on sight.
+# Union-merge it instead. Requires each clone to register the driver once:
+#   git config merge.graphify.name "graphify graph union merge"
+#   git config merge.graphify.driver "graphify merge-driver %O %A %B"
+# (git will not run a driver that is not configured locally — it falls back to a normal
+# conflict, so an unconfigured clone is degraded, never broken.)
+/graphify-out/graph.json merge=graphify
