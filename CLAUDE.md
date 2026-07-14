@@ -3,14 +3,20 @@
 ## Purpose
 
 Concrete implementation of `isapp/laravel-cashier-support` contracts for **Revolut Merchant API**.
-Analogous to `laravel/cashier-stripe` for Stripe and `mollie/laravel-cashier-mollie` for Mollie.
+Analogous to `laravel/cashier-stripe` for Stripe and `laravel/cashier-paddle` for Paddle —
+those two are the references this driver is measured against. `mollie/laravel-cashier-mollie`
+is a last resort only: it builds its own local subscription engine, which the smart-stub rule
+forbids.
 
 The user adds `use \Isapp\CashierSupport\Billable;` to the User model
 and works with the standard Cashier API — everything routes through Revolut.
 
 ## Revolut API
 
-Primary API: **Revolut Merchant API** (https://developer.revolut.com/docs/merchant/merchant-api)
+Primary API: **Revolut Merchant API**. Read the reference as markdown, one file per
+operation — `https://developer.revolut.com/docs/api/merchant/operations/<operation>.md`
+(curl + a browser User-Agent; `WebFetch` 403s and the HTML is JS-rendered). See
+`.claude/rules/sources-of-truth.md`.
 Version: `2026-04-20` (header `Revolut-Api-Version`)
 
 Merchant API capabilities:
