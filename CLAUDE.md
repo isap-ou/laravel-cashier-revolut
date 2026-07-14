@@ -122,3 +122,41 @@ CASHIER_CURRENCY_LOCALE=en_IE
 - All public methods — PHPDoc
 - PSR-12 (Pint), PHPStan level 8 (Larastan)
 - Tests: Mockery for HTTP, Testbench for integration, 100% coverage
+
+## Known divergences from the reference drivers (audited 2026-07-14)
+
+Both reference `WebhookController`s were compared against ours method-by-method. Two open
+issues — **do not work around either locally, and do not assume the webhook layer is done**:
+
+- **#24** (bug) — `WebhookReceived` is dispatched at `RevolutWebhookController.php:78`, i.e.
+  **after** `parseWebhook()` (`:64`). An event type outside the 8 cases of `RevolutWebhookEvent`
+  throws, is caught, and returns a bare 200 (`:65-75`) — so it never reaches a listener.
+  In both references `WebhookReceived` fires *first*, precisely so it is the universal escape
+  hatch for events the package does not map. We also removed the other escape hatch: the
+  references let an app subclass `WebhookController` and add `handleXxx()`, while
+  `RevolutWebhookSynchronizer` is `private` methods behind a closed `match` (`:77-86`).
+  **Net: an app cannot react to any event we did not map.**
+- **#25** — no customer-lifecycle webhooks at all. Stripe handles customer updated/deleted and
+  payment-method auto-update (`WebhookController.php:240-286`); we handle none, so a customer
+  deleted at Revolut leaves a local record claiming an active subscription against a dead id.
+  Pairs with support#36 (no local → gateway sync) — the drift is bidirectional.
+
+Where this driver is deliberately **better** than the references (keep it): signature
+verification is mandatory and a missing secret is a hard failure (both references silently skip
+verification when the secret is unset), `throttle` on the webhook route, transient-only retry
+with exponential backoff, idempotency via `updateOrCreate` + `wasRecentlyCreated` gating.
+
+## Navigating this package — use the graph, not grep
+
+`graphify-out/graph.json` exists (AST + semantic). Start here instead of reading `src/` file by
+file — and note the cross-package graph at `../../../graphify-refs/merged/`, which is the only
+place where "which support contract does `RevolutGateway` implement" is a single query.
+
+```bash
+graphify query "how does the webhook reach the synchronizer"
+graphify explain "RevolutWebhookSynchronizer"
+graphify path "RevolutGateway" "GatewayProvider"    # needs the merged graph (--graph)
+graphify affected "RevolutWebhookEvent"             # what breaks if I add an event
+```
+
+After changing code: `graphify update .` (AST-only, no LLM cost).
