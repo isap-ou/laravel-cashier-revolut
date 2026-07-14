@@ -38,8 +38,19 @@ class RevolutConnector
 
     /**
      * A preconfigured Revolut Merchant API request.
+     *
+     * $idempotencyKey identifies the OPERATION, not the request. A key minted here
+     * per call protects the transport (->retry() re-sends the same PendingRequest,
+     * so a transient failure keeps its key) and nothing above it: a queued job that
+     * retries, or a caller that catches and retries, arrives with a brand-new key
+     * and Revolut treats it as a brand-new charge or refund. Real money, twice.
+     *
+     * The random default stays for calls that supply nothing — a deterministic
+     * default would be worse than none: Revolut explicitly allows several partial
+     * refunds of one order, and deduplicating them would silently swallow the
+     * second legitimate one.
      */
-    public function request(): PendingRequest
+    public function request(?string $idempotencyKey = null): PendingRequest
     {
         $secretKey = $this->string('cashier-revolut.secret_key');
 
@@ -52,7 +63,7 @@ class RevolutConnector
             ->withToken($secretKey)
             ->withHeaders([
                 'Revolut-Api-Version' => $this->string('cashier-revolut.api_version', '2026-04-20'),
-                'Idempotency-Key' => (string) Str::uuid7(),
+                'Idempotency-Key' => $idempotencyKey ?? (string) Str::uuid7(),
             ])
             ->acceptJson()
             ->asJson()

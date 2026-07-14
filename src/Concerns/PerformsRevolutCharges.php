@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Isapp\CashierRevolut\Concerns;
 
 use Illuminate\Database\Eloquent\Model;
+use Isapp\CashierRevolut\Enums\RevolutOrderState;
 use Isapp\CashierRevolut\Http\Requests\CreateOrderRequest;
+use Isapp\CashierRevolut\Http\Requests\MerchantOrderDataRequest;
 use Isapp\CashierRevolut\Http\Requests\OrderCustomerRequest;
 use Isapp\CashierRevolut\Http\Requests\PayOrderRequest;
 use Isapp\CashierRevolut\Http\Requests\RefundOrderRequest;
@@ -33,12 +35,28 @@ trait PerformsRevolutCharges
         // Paying with a saved method requires the order to belong to the
         // customer — fail fast instead of surfacing a downstream API error.
         $customerId = $this->revolutCustomerId($billable);
+        $key = $this->idempotencyKey($options);
 
-        return $this->guardConnection(function () use ($amount, $paymentMethod, $options, $customerId): Payment {
-            $order = OrderResponse::from($this->revolut()->post('/orders', (new CreateOrderRequest(
+        return $this->guardConnection(function () use ($amount, $paymentMethod, $options, $customerId, $key): Payment {
+            // POST /orders does not accept an Idempotency-Key — the header is
+            // documented on the refund and the subscription create, and nowhere
+            // else — so Revolut will not deduplicate a charge for us. It will help
+            // us deduplicate it ourselves: the order carries the caller's operation
+            // key as its own reference, and an order already carrying that reference
+            // is THIS operation, already done.
+            $existing = $key === null ? null : $this->orderForReference($key);
+
+            if ($existing !== null && $existing->orderState() !== RevolutOrderState::Pending) {
+                // Already paid on an earlier attempt. Paying it again is the double
+                // charge this whole method exists to prevent.
+                return $this->settledPayment($existing->id);
+            }
+
+            $order = $existing ?? OrderResponse::from($this->revolut()->post('/orders', (new CreateOrderRequest(
                 amount: $amount,
                 currency: $this->currencyFromOptions($options),
                 customer: new OrderCustomerRequest($customerId),
+                merchantOrderData: $key === null ? null : new MerchantOrderDataRequest($key),
             ))->payload())->json() ?? []);
 
             $type = is_string($options['payment_method_type'] ?? null) ? $options['payment_method_type'] : null;
@@ -48,14 +66,39 @@ trait PerformsRevolutCharges
                 (new PayOrderRequest($paymentMethod, $type))->payload(),
             );
 
-            $result = OrderResponse::from($this->revolut()->get("/orders/{$order->id}")->json() ?? [])->toPayment();
-
-            if ($result->status === PaymentStatus::Failed) {
-                throw PaymentFailedException::forPayment($result->id);
-            }
-
-            return $result;
+            return $this->settledPayment($order->id);
         });
+    }
+
+    /**
+     * The order this operation already created, if it did.
+     *
+     * Revolut lists orders by the reference we set on them, so a retry of the same
+     * operation finds its own order instead of creating a second one.
+     */
+    private function orderForReference(string $reference): ?OrderResponse
+    {
+        $orders = $this->revolut()
+            ->get('/orders', ['merchant_order_data_reference' => $reference, 'limit' => 1])
+            ->json();
+
+        $first = is_array($orders) ? ($orders['orders'][0] ?? $orders[0] ?? null) : null;
+
+        return is_array($first) ? OrderResponse::from($first) : null;
+    }
+
+    /**
+     * The order's payment, refetched, with a declined one raised as a failure.
+     */
+    private function settledPayment(string $orderId): Payment
+    {
+        $payment = OrderResponse::from($this->revolut()->get("/orders/{$orderId}")->json() ?? [])->toPayment();
+
+        if ($payment->status === PaymentStatus::Failed) {
+            throw PaymentFailedException::forPayment($payment->id);
+        }
+
+        return $payment;
     }
 
     /**
@@ -88,8 +131,10 @@ trait PerformsRevolutCharges
             ? $this->currencyFromOptions($options)
             : null;
 
-        $refund = $this->guardConnection(function () use ($paymentId, $amount, $currency): Refund {
-            $response = RefundResponse::from($this->revolut()->post(
+        $key = $this->idempotencyKey($options);
+
+        $refund = $this->guardConnection(function () use ($paymentId, $amount, $currency, $key): Refund {
+            $response = RefundResponse::from($this->revolut($key)->post(
                 "/orders/{$paymentId}/refund",
                 (new RefundOrderRequest($currency, $amount))->payload(),
             )->json() ?? []);
