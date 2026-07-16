@@ -26,7 +26,8 @@ Merchant API capabilities:
 - **Subscription Plans** — plan-based model with variations and phases (trial, monthly, yearly)
 - **Subscriptions** — create, list, get, update, cancel, change plan (no native pause/resume endpoints)
 - **Billing Cycles** — first-class concept with dedicated endpoints per subscription
-- **Webhooks** — ORDER_COMPLETED, ORDER_PAYMENT_DECLINED, ORDER_PAYMENT_FAILED, SUBSCRIPTION_INITIATED, SUBSCRIPTION_FINISHED, SUBSCRIPTION_CANCELLED, SUBSCRIPTION_OVERDUE
+- **Webhooks** — **22 documented event types** across Order / Payment / Subscription / Payout /
+  Dispute. We map 8; the verified enum and the 14 we drop are in `.claude/rules/revolut-api.md`
 - **Checkout Widget** — JS widget for accepting payments (analogous to Stripe Elements)
 
 Authorization: API keys from the Revolut Business dashboard.
@@ -125,21 +126,38 @@ CASHIER_CURRENCY_LOCALE=en_IE
 
 ## Known divergences from the reference drivers (audited 2026-07-14)
 
-Both reference `WebhookController`s were compared against ours method-by-method. Two open
-issues — **do not work around either locally, and do not assume the webhook layer is done**:
+Both reference `WebhookController`s were compared against ours method-by-method. **Do not work
+around a gap locally, and do not assume the webhook layer is done.** For what is open:
 
-- **#24** (bug) — `WebhookReceived` is dispatched at `RevolutWebhookController.php:78`, i.e.
-  **after** `parseWebhook()` (`:64`). An event type outside the 8 cases of `RevolutWebhookEvent`
-  throws, is caught, and returns a bare 200 (`:65-75`) — so it never reaches a listener.
-  In both references `WebhookReceived` fires *first*, precisely so it is the universal escape
-  hatch for events the package does not map. We also removed the other escape hatch: the
-  references let an app subclass `WebhookController` and add `handleXxx()`, while
-  `RevolutWebhookSynchronizer` is `private` methods behind a closed `match` (`:77-86`).
-  **Net: an app cannot react to any event we did not map.**
-- **#25** — no customer-lifecycle webhooks at all. Stripe handles customer updated/deleted and
-  payment-method auto-update (`WebhookController.php:240-286`); we handle none, so a customer
-  deleted at Revolut leaves a local record claiming an active subscription against a dead id.
-  Pairs with support#36 (no local → gateway sync) — the drift is bidirectional.
+```bash
+gh issue list --repo isap-ou/laravel-cashier-revolut   # what is open, right now
+```
+
+**That command is the status; this section is not.** It carries the *shape* of the gaps, which
+outlives any one issue, and does not restate them — a ticket list copied into a doc drifts
+silently, and this file has no test over it. Two shapes matter here:
+
+**The webhook escape hatch is missing, and this repo cannot restore it (#24).**
+`WebhookReceived` is meant to fire for every *verified* payload, before any dispatch decision, so
+an app can react to an event the package never mapped. Ours fires after `parseWebhook()`, so the
+**14 of Revolut's 22 documented events that we do not map** are acknowledged with a 200 and
+vanish. Not a hypothetical: they are documented today, and they include every `DISPUTE_*` — a
+customer disputing a charge reaches no listener, and `DISPUTE_ACTION_REQUIRED` is the one with a
+deadline attached. (3DS is a lesser case than it first looks: `ORDER_PAYMENT_AUTHENTICATION_CHALLENGED`
+is unmapped too, but an app can still *poll* `GET /orders/{id}` for it — see
+`.claude/rules/revolut-api.md`. What the webhook gap costs there is push, not knowledge.)
+**It is not a reorder.** The references dispatch a raw array, so any event type travels; we
+dispatch a typed `Support\DTO\WebhookPayload` whose `$event` is a non-nullable 8-case enum — for
+an unmapped event the payload cannot be *constructed*, so there is nothing to move. Support moves
+first, which is also where `.claude/rules/sources-of-truth.md` puts it; every driver-side route
+out is worse than the bug, including the one that compiles. The detail lives on the issue and in
+`tests/Feature/WebhookControllerTest.php`, where the acceptance test is skipped behind a tripwire
+that asserts the blocker still holds — so it goes red the day support moves.
+
+**Nothing reconciles the customer record when it changes at the gateway (#25).** We handle no
+customer-lifecycle webhooks, so a customer deleted at Revolut leaves a local record claiming an
+active subscription against a dead id. Pairs with support#36 (no local → gateway sync): the drift
+is bidirectional, so fixing either half alone still leaves the records able to diverge.
 
 Where this driver is deliberately **better** than the references (keep it): signature
 verification is mandatory and a missing secret is a hard failure (both references silently skip

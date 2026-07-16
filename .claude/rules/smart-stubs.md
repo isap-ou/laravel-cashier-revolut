@@ -28,7 +28,8 @@ When Revolut API does not natively support a feature:
 - `payment_methods.get` — GET /api/customers/{id}/payment-methods/{id}
 - `payment_methods.delete` — DELETE /api/customers/{id}/payment-methods/{id} (204)
 - `checkout.amount` — Revolut Checkout Widget (an order amount; Revolut has no checkout price catalogue, so `checkout.prices` is NOT declared)
-- `webhooks` — ORDER_COMPLETED, SUBSCRIPTION_* events
+- `webhooks` — we map 8 of the 22 documented event types (Order/Payment/Subscription/Payout/
+  Dispute); see `revolut-api.md` for the verified enum and which 14 we drop
 
 ## Provider-independent (handled by cashier-support, not Revolut API)
 
