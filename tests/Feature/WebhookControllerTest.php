@@ -122,8 +122,12 @@ class WebhookControllerTest extends TestCase
         // WebhookReceived is meant to be the universal escape hatch: both references
         // dispatch it before any dispatch decision, so an app can react to an event
         // the package never mapped. Ours covers only the 8 cases of RevolutWebhookEvent,
-        // so ORDER_REFUND_COMPLETED, a payout, or whatever Revolut ships next year is
-        // acknowledged with a 200 and vanishes — no listener ever sees it.
+        // so anything outside them is acknowledged with a 200 and vanishes — no listener
+        // ever sees it. The realistic instance is an event Revolut adds after this was
+        // written; the string below is a stand-in for "unmapped", not a real event.
+        // (.claude/rules/revolut-api.md:55 is what the catalogue is known NOT to contain;
+        // it does not enumerate it, so do not invent an example — an earlier draft of this
+        // comment cited ORDER_REFUND_COMPLETED, which Revolut does not emit.)
         //
         // The reorder cannot be done here, because the event cannot be CONSTRUCTED.
         // The references dispatch a raw array; we dispatch a typed
