@@ -137,22 +137,27 @@ gh issue list --repo isap-ou/laravel-cashier-revolut   # what is open, right now
 outlives any one issue, and does not restate them — a ticket list copied into a doc drifts
 silently, and this file has no test over it. Two shapes matter here:
 
-**The webhook escape hatch is missing, and this repo cannot restore it (#24).**
-`WebhookReceived` is meant to fire for every *verified* payload, before any dispatch decision, so
-an app can react to an event the package never mapped. Ours fires after `parseWebhook()`, so the
-**14 of Revolut's 22 documented events that we do not map** are acknowledged with a 200 and
-vanish. Not a hypothetical: they are documented today, and they include every `DISPUTE_*` — a
-customer disputing a charge reaches no listener, and `DISPUTE_ACTION_REQUIRED` is the one with a
-deadline attached. (3DS is a lesser case than it first looks: `ORDER_PAYMENT_AUTHENTICATION_CHALLENGED`
-is unmapped too, but an app can still *poll* `GET /orders/{id}` for it — see
-`.claude/rules/revolut-api.md`. What the webhook gap costs there is push, not knowledge.)
-**It is not a reorder.** The references dispatch a raw array, so any event type travels; we
-dispatch a typed `Support\DTO\WebhookPayload` whose `$event` is a non-nullable 8-case enum — for
-an unmapped event the payload cannot be *constructed*, so there is nothing to move. Support moves
-first, which is also where `.claude/rules/sources-of-truth.md` puts it; every driver-side route
-out is worse than the bug, including the one that compiles. The detail lives on the issue and in
-`tests/Feature/WebhookControllerTest.php`, where the acceptance test is skipped behind a tripwire
-that asserts the blocker still holds — so it goes red the day support moves.
+**The webhook escape hatch is open (#24), and the shape of how it got there is the lesson.**
+`WebhookReceived` fires for every *verified* body, above `parseWebhook()` and every decision about
+what the event means — so the **14 of Revolut's 22 documented events we do not map** now reach a
+listener carrying the raw body, instead of vanishing behind a 200. They include every `DISPUTE_*`;
+`DISPUTE_ACTION_REQUIRED` is the one with a deadline attached. (3DS was always a lesser case than
+it looks: `ORDER_PAYMENT_AUTHENTICATION_CHALLENGED` is unmapped too, but an app can *poll*
+`GET /orders/{id}` for it — see `.claude/rules/revolut-api.md`. What the gap cost there was push,
+not knowledge.)
+
+**It was a four-line reorder that this repo still could not do**, and that is the part worth
+keeping. `WebhookReceived` carried a typed `Support\DTO\WebhookPayload` whose `$event` was a
+non-nullable 8-case enum, so for an unmapped event the payload could not be *constructed* — there
+was nothing to move, and every driver-side route out (mapping it onto a wrong case, subclassing
+the DTO, inventing a driver event) was worse than the bug. Support moved first, which is where
+`.claude/rules/sources-of-truth.md` puts it: its #42 made `WebhookReceived`/`WebhookHandled` carry
+the provider's **raw decoded body**, as both references always have. Only then did the reorder
+here become four lines. `parseWebhook()` still throws for an unmapped event and that is now
+harmless — the hatch has already fired above it.
+
+Whether to *map* any of the other 14 is a separate, open question: it needs "does a payout belong
+in a provider-agnostic contract at all" answered first, and it is not what the hatch is for.
 
 **Nothing reconciles the customer record when it changes at the gateway (#25).** We handle no
 customer-lifecycle webhooks, so a customer deleted at Revolut leaves a local record claiming an

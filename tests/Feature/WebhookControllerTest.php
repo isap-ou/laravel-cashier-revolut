@@ -9,11 +9,8 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Testing\TestResponse;
 use Isapp\CashierRevolut\Tests\Fixtures\RevolutApi;
 use Isapp\CashierRevolut\Tests\TestCase;
-use Isapp\CashierSupport\DTO\WebhookPayload;
-use Isapp\CashierSupport\Enums\WebhookEvent;
 use Isapp\CashierSupport\Events\WebhookHandled;
 use Isapp\CashierSupport\Events\WebhookReceived;
-use ReflectionClass;
 
 class WebhookControllerTest extends TestCase
 {
@@ -29,8 +26,8 @@ class WebhookControllerTest extends TestCase
         $response->assertOk();
 
         Event::assertDispatched(WebhookReceived::class, function (WebhookReceived $event): bool {
-            return $event->payload->event === WebhookEvent::PaymentSucceeded
-                && $event->payload->id === RevolutApi::ORDER_ID;
+            return $event->payload['event'] === 'ORDER_COMPLETED'
+                && $event->payload['order_id'] === RevolutApi::ORDER_ID;
         });
         Event::assertDispatched(WebhookHandled::class);
     }
@@ -116,89 +113,79 @@ class WebhookControllerTest extends TestCase
     }
 
     /**
-     * The acceptance test for #24 cannot be written yet, so this stands in its place:
-     * it asserts the blocker is still real, and skips. When it goes red, #24 is
-     * unblocked — write the real test (an unmapped event reaches a WebhookReceived
-     * listener), hoist the dispatch above parseWebhook(), keep it below verifyWebhook().
+     * #24's acceptance test, and what the tripwire that stood here was holding the
+     * place for.
+     *
+     * PAYOUT_INITIATED is a real documented Revolut event that this driver does not
+     * map — one of 14 out of 22 (see .claude/rules/revolut-api.md). It used to reach
+     * no listener at all: parseWebhook() threw for it and the controller caught that
+     * ABOVE the dispatch, so the dispatch was unreachable for every unmapped event.
      */
-    public function test_the_unmapped_event_escape_hatch_is_still_blocked_on_support(): void
+    public function test_an_unmapped_event_reaches_a_listener_and_is_acknowledged_with_200(): void
     {
-        // #24, and it is BLOCKED on the support package — do not "fix" this locally.
-        //
-        // WebhookReceived is meant to be the universal escape hatch: both references
-        // dispatch it before any dispatch decision, so an app can react to an event the
-        // package never mapped. Ours maps 8 of the 22 event types the Merchant API
-        // documents, so the other 14 are acknowledged with a 200 and vanish — no listener
-        // ever sees them. This is today, not a hypothetical: PAYOUT_INITIATED below is a
-        // real documented event, and so are the four DISPUTE_* — a customer disputing a
-        // charge is invisible to the app, and DISPUTE_ACTION_REQUIRED is the one with a
-        // deadline attached. See .claude/rules/revolut-api.md for the verified enum.
-        //
-        // The reorder cannot be done here, because the event cannot be CONSTRUCTED.
-        // The references dispatch a raw array; we dispatch a typed
-        // Support\DTO\WebhookPayload whose $event is a non-nullable WebhookEvent, an
-        // 8-case closed enum with no case for an unmapped event. Every driver-side
-        // route out is worse than the bug:
-        //   - map it onto some existing case → a dispute gets credited as a customer
-        //     payment. Lying to listeners is not an escape hatch.
-        //   - pass null → TypeError, WebhookPayload::$event is not nullable.
-        //   - subclass WebhookPayload and leave $event unset → constructs, then throws
-        //     "must not be accessed before initialization" inside the app's listener.
-        //   - dispatch a driver-specific event instead → an app listening for the
-        //     contract's WebhookReceived still gets nothing, which is the actual ask.
-        //
-        // Support must let WebhookPayload express an unmapped event first, and there are
-        // two plausible doors: a nullable $event alongside a raw provider event string,
-        // or a WebhookEvent case meaning "unmapped". Both are watched below — an earlier
-        // version of this tripwire watched only the first, so the second would have left
-        // it green after #24 was unblocked, which is the failure it exists to prevent.
-        $constructor = (new ReflectionClass(WebhookPayload::class))->getConstructor();
+        /** @var array<string, mixed>|null $seen */
+        $seen = null;
 
-        $event = null;
-        foreach ($constructor?->getParameters() ?? [] as $parameter) {
-            if ($parameter->getName() === 'event') {
-                $event = $parameter;
-                break;
-            }
-        }
-
-        $this->assertNotNull($event, 'WebhookPayload has no $event parameter — the contract moved; recheck #24.');
-
-        // Door 1: $event goes nullable.
-        $this->assertFalse(
-            $event->getType()?->allowsNull(),
-            'support\'s WebhookPayload::$event is nullable now — #24 is UNBLOCKED. Dispatch '
-            .'WebhookReceived above parseWebhook() in RevolutWebhookController, then replace '
-            .'this tripwire with the real assertion: an unmapped event reaches the listener.'
-        );
-
-        // Door 2: WebhookEvent gains a case. Any new case is worth a look — if it means
-        // "the driver did not map this", #24 is unblocked by that route instead.
-        $this->assertCount(
-            8,
-            WebhookEvent::cases(),
-            'support\'s WebhookEvent gained or lost a case — if one of them expresses an '
-            .'unmapped event, #24 is UNBLOCKED and this skip must go. If it is unrelated, '
-            .'update this count.'
-        );
-
-        $this->markTestSkipped('#24: blocked on support — DTO\WebhookPayload cannot express an unmapped event.');
-    }
-
-    public function test_an_unmapped_event_is_still_acknowledged_with_200(): void
-    {
-        // The half of #24 that already holds and must survive the fix: Revolut retries
-        // a 4XX three times, ten minutes apart, and retrying an event this driver has
-        // no handler for would never succeed. So it is acknowledged, not refused.
+        // A real listener, not Event::fake(): the claim is that an app RECEIVES it.
+        Event::listen(WebhookReceived::class, function (WebhookReceived $event) use (&$seen): void {
+            $seen = $event->payload;
+        });
         Event::fake([WebhookHandled::class]);
 
         $response = $this->postSigned('{"event":"PAYOUT_INITIATED","id":"po_1"}');
 
+        // The escape hatch fired, and it carries the body as Revolut sent it.
+        $this->assertSame(
+            ['event' => 'PAYOUT_INITIATED', 'id' => 'po_1'],
+            $seen,
+            'An unmapped event reached no WebhookReceived listener.',
+        );
+
+        // The half of #24 that already held and had to survive the fix: Revolut retries
+        // a 4XX three times, ten minutes apart, and retrying an event this driver has
+        // no handler for would never succeed. So it is acknowledged, not refused.
         $response->assertOk();
         $response->assertSee('Webhook ignored.');
 
-        // Nothing was applied to local state — there is no handler for it.
+        // Nothing was applied to local state — there is no handler for it. Saying
+        // "handled" would trade the old silence for a lie.
         Event::assertNotDispatched(WebhookHandled::class);
+    }
+
+    public function test_signature_verification_still_runs_before_the_hatch(): void
+    {
+        // The other half of #24's acceptance, and it matters more now that the hatch is
+        // wide: an unverified body is not an event, it is noise, and dispatching it to
+        // listeners would let anyone who can reach the URL fabricate one.
+        Event::fake([WebhookReceived::class, WebhookHandled::class]);
+
+        $this->postRaw('{"event":"PAYOUT_INITIATED","id":"po_1"}', [
+            'Revolut-Request-Timestamp' => (string) (time() * 1000),
+            'Revolut-Signature' => 'v1=deadbeef',
+        ])->assertStatus(400);
+
+        Event::assertNotDispatched(WebhookReceived::class);
+    }
+
+    public function test_a_mapped_event_carries_the_raw_body_to_both_events(): void
+    {
+        /** @var array<string, mixed> $seen */
+        $seen = [];
+
+        Event::listen(WebhookReceived::class, function (WebhookReceived $event) use (&$seen): void {
+            $seen['received'] = $event->payload;
+        });
+        Event::listen(WebhookHandled::class, function (WebhookHandled $event) use (&$seen): void {
+            $seen['handled'] = $event->payload;
+        });
+        RevolutApi::fake();
+
+        $body = ['event' => 'ORDER_COMPLETED', 'order_id' => RevolutApi::ORDER_ID];
+        $this->postSigned((string) json_encode($body))->assertOk();
+
+        // The pair must agree, or an app has to read one webhook two ways.
+        $this->assertSame($body, $seen['received'] ?? null);
+        $this->assertSame($body, $seen['handled'] ?? null);
     }
 
     private function postSigned(string $payload): TestResponse

@@ -114,6 +114,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An event this driver does not map now reaches a `WebhookReceived` listener.**
+  Revolut documents **22** event types and `RevolutWebhookEvent` maps **8**, so 14 were
+  acknowledged with a 200 and vanished — the 4 `DISPUTE_*`, the 3 `PAYOUT_*`, the 3
+  `ORDER_INCREMENTAL_AUTHORISATION_*`, `ORDER_AUTHORISED`, `ORDER_CANCELLED`,
+  `ORDER_PAYMENT_AUTHENTICATED` and `ORDER_PAYMENT_AUTHENTICATION_CHALLENGED` (3DS).
+  **No listener ever saw them**, so a customer disputing a charge was invisible to the
+  app, and `DISPUTE_ACTION_REQUIRED` is the one with a deadline attached. Requires
+  `isapp/laravel-cashier-support` #42.
+
+  `event(new WebhookReceived(...))` sat **below** `parseWebhook()`, which throws
+  `UnexpectedWebhookEventException` for exactly those 14 — and the controller caught it
+  and returned first, so the dispatch was unreachable for every unmapped event. It now
+  sits above the parse and below `verifyWebhook()`, which is where both references put
+  it (`laravel/cashier`'s `Http/Controllers/WebhookController.php:45`, `-paddle`'s `:49`).
+
+  **The reorder is four lines, and it still needed support to move first.** The event
+  carried a typed `Support\DTO\WebhookPayload` whose `$event` was a non-nullable 8-case
+  enum: for an unmapped event the payload could not be *constructed*, so there was
+  nothing to hoist. Support#42 made `WebhookReceived`/`WebhookHandled` carry the raw
+  decoded body — as the references always have — and only then was there something to
+  move. `parseWebhook()` still throws for an unmapped event, which is now harmless: the
+  hatch has already fired above it.
+
+  Unchanged on purpose: an unmapped event still answers `200 "Webhook ignored."`, because
+  Revolut retries a 4XX three times ten minutes apart and retrying an event we have no
+  handler for would never succeed. **`WebhookHandled` still does not fire** for one —
+  nothing was handled, and saying otherwise would trade the old silence for a lie. The
+  reference draws the same line (`WebhookController.php:47-52`).
+
+  Signature verification still runs first, and that matters more now that the hatch is
+  wide: an unverified body is not an event, and this is exactly where anyone who could
+  reach the URL would fabricate one. A test pins the ordering rather than trusting it.
+
 - **A caller-level retry no longer charges or refunds twice.** The connector minted a
   fresh `Idempotency-Key` per API call, which protects the transport — `->retry()`
   re-sends the same request, so a transient failure keeps its key — and nothing above

@@ -60,22 +60,35 @@ class RevolutWebhookController
             return $this->refuseMisconfigured($exception);
         }
 
+        $decoded = json_decode($content, true);
+        /** @var array<string, mixed> $body */
+        $body = is_array($decoded) ? $decoded : [];
+
+        // The escape hatch, and it must sit here: above every decision about what
+        // this event means, below verifyWebhook(). Revolut documents 22 event types
+        // and this driver maps 8, so the other 14 — every DISPUTE_* among them —
+        // reach a listener only through this line. It used to sit below
+        // parseWebhook(), which throws for exactly those 14, so it was unreachable
+        // for all of them and they vanished behind the 200 below.
+        //
+        // Both references do the same, for the same reason
+        // (laravel/cashier's WebhookController.php:45, -paddle's :49).
+        event(new WebhookReceived($body));
+
         try {
             $payload = $this->handler->parseWebhook($content, $headers);
         } catch (UnexpectedWebhookEventException $exception) {
             // Acknowledge events we do not subscribe to instead of erroring, so
             // Revolut does not retry them — retrying an event this driver has no
-            // handler for would never succeed. Logged, because this arm also
-            // catches a body this driver could not read at all, and "we quietly
-            // dropped it" must be visible somewhere.
+            // handler for would never succeed. Harmless now in a way it was not
+            // before: the hatch above already fired, so this drops the local sync,
+            // not the event.
             $this->logger->info('A Revolut webhook event was acknowledged without being handled', [
                 'exception' => $exception->getMessage(),
             ]);
 
             return new Response('Webhook ignored.', 200);
         }
-
-        event(new WebhookReceived($payload));
 
         try {
             $this->synchronizer->handle($payload);
@@ -87,7 +100,10 @@ class RevolutWebhookController
             return $this->refuseMisconfigured($exception);
         }
 
-        event(new WebhookHandled($payload));
+        // Only for an event we actually applied — the reference draws the same line
+        // (laravel/cashier's WebhookController.php:47-52 dispatches it only when a
+        // handler existed). The early return above is what keeps that true.
+        event(new WebhookHandled($body));
 
         return new Response('Webhook handled.', 200);
     }
