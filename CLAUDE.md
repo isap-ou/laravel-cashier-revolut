@@ -148,15 +148,30 @@ with exponential backoff, idempotency via `updateOrCreate` + `wasRecentlyCreated
 
 ## Navigating this package — use the graph, not grep
 
-`graphify-out/graph.json` exists (AST + semantic). Start here instead of reading `src/` file by
-file — and note the cross-package graph at `../../../graphify-refs/merged/`, which is the only
-place where "which support contract does `RevolutGateway` implement" is a single query.
+`graphify-out/` is a **local build artifact and is not in git** — a fresh clone has no graph
+until you build one. Once it exists, start there instead of reading `src/` file by file — and
+note the cross-package graph at `../../../graphify-refs/merged/` (also local, and rebuilt with
+`graphify merge-graphs`), which is the only place where "which support contract does
+`RevolutGateway` implement" is a single query.
 
 ```bash
+graphify update .                                   # build/refresh it (AST, seconds)
 graphify query "how does the webhook reach the synchronizer"
 graphify explain "RevolutWebhookSynchronizer"
 graphify path "RevolutGateway" "GatewayProvider"    # needs the merged graph (--graph)
 graphify affected "RevolutWebhookEvent"             # what breaks if I add an event
 ```
 
-After changing code: `graphify update .` (AST-only, no LLM cost).
+`graphify update` builds the AST layer only — no API key, no cost. The semantic layer
+(INFERRED edges, hyperedges, community names) needs an LLM: `graphify extract . --mode deep`
+with a backend key set (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, …); without one graphify leaves
+`Community N` placeholders. Everything works without it; the queries are just blunter.
+
+The last semantically-built graph is still in git history if you want it back rather than
+rebuilt: `git show 978a970:graphify-out/graph.json > graphify-out/graph.json`, then
+`graphify update .` to bring the AST layer forward (it was committed once and never refreshed,
+so its AST layer is as of that commit).
+
+Do not commit `graphify-out/`. It used to be tracked so a clone could inherit the semantic
+layer; the post-commit hook rebuilds without a key and the rebuild is lossy, so tracking eroded
+that layer commit by commit while adding ~27k lines of diff to unrelated PRs.
