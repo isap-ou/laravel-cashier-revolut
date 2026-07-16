@@ -261,9 +261,32 @@ php artisan cashier-revolut:webhook https://your-app.test/webhook/revolut
 ```
 
 Incoming webhooks are verified (HMAC-SHA256 over `v1.{timestamp}.{body}`) and
-dispatched as the support package's `WebhookReceived` / `WebhookHandled` events
-carrying a normalized `WebhookPayload`. Listen to those to react to gateway
-activity.
+dispatched as the support package's `WebhookReceived` / `WebhookHandled` events,
+carrying Revolut's **raw decoded body**.
+
+For gateway activity in provider-neutral terms, listen to the **typed** events
+instead — `PaymentSucceeded`, `SubscriptionCreated`, `SubscriptionCanceled`,
+`SubscriptionRenewed`, `SubscriptionPastDue` and the rest. They carry the billable
+and a real DTO, and they are what the driver dispatches once a webhook has been
+applied.
+
+`WebhookReceived` is the escape hatch, and it fires for **every** verified event —
+including the 14 of Revolut's 22 documented types this driver does not map (every
+`DISPUTE_*`, the `PAYOUT_*`, `ORDER_AUTHORISED`, the 3DS challenge, …). Nothing is
+applied to local state for those and `WebhookHandled` does **not** fire, but your
+listener sees them:
+
+```php
+Event::listen(function (WebhookReceived $event) {
+    if (($event->payload['event'] ?? null) === 'DISPUTE_ACTION_REQUIRED') {
+        // ... this one has a deadline attached.
+    }
+});
+```
+
+The payload is Revolut-shaped on purpose: an event nobody mapped has no
+provider-neutral meaning to render, and inventing one would be a lie. Use the typed
+events for meaning, this one for reach.
 
 **Who announces what, and exactly once.**
 
