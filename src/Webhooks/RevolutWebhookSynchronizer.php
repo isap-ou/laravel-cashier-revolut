@@ -19,7 +19,6 @@ use Isapp\CashierRevolut\Http\RevolutConnector;
 use Isapp\CashierRevolut\RevolutGateway;
 use Isapp\CashierSupport\DTO\Invoice;
 use Isapp\CashierSupport\DTO\Payment;
-use Isapp\CashierSupport\DTO\WebhookPayload;
 use Isapp\CashierSupport\Enums\BillingReason;
 use Isapp\CashierSupport\Enums\PaymentStatus;
 use Isapp\CashierSupport\Enums\SubscriptionStatus;
@@ -64,13 +63,34 @@ class RevolutWebhookSynchronizer
         private readonly LoggerInterface $logger,
     ) {}
 
-    public function handle(WebhookPayload $payload): void
+    /**
+     * Apply a verified Revolut webhook body to local state.
+     *
+     * Takes the raw decoded body, which is all it ever really wanted: it used to take a
+     * DTO\WebhookPayload and then dig `$payload->data['event']` — a Revolut-native key —
+     * back out of a field the DTO called "provider-agnostic event data" (support#46). It
+     * never once read the agnostic `$payload->event` beside it. The DTO is gone and this
+     * reads the body directly, which is honest: a Revolut-native key in a Revolut body.
+     *
+     * @param  array<string, mixed>  $body
+     * @return bool True when the event was applied; false when this driver does not map
+     *              it, or maps it but the body names no resource to apply it to. Support's
+     *              controller dispatches WebhookHandled only for true.
+     *
+     * @throws RevolutApiException When the refetch fails for any reason but a 404.
+     */
+    public function handle(array $body): bool
     {
-        $raw = is_string($payload->data['event'] ?? null) ? $payload->data['event'] : '';
+        $raw = is_string($body['event'] ?? null) ? $body['event'] : '';
         $event = RevolutWebhookEvent::tryFrom($raw);
+        $id = $this->resourceId($body);
 
-        if ($event === null || $payload->id === '') {
-            return;
+        if ($event === null || $id === '') {
+            // The rule that replaced the ordering: never throw here. Revolut documents 22
+            // event types and this driver maps 8, so the other 14 — every DISPUTE_* among
+            // them — take this line. They already reached a listener: support dispatched
+            // WebhookReceived above this call, which is the whole of #24's fix.
+            return false;
         }
 
         try {
@@ -78,11 +98,11 @@ class RevolutWebhookSynchronizer
                 RevolutWebhookEvent::SubscriptionInitiated,
                 RevolutWebhookEvent::SubscriptionFinished,
                 RevolutWebhookEvent::SubscriptionCancelled,
-                RevolutWebhookEvent::SubscriptionOverdue => $this->syncSubscription($event, $payload->id),
+                RevolutWebhookEvent::SubscriptionOverdue => $this->syncSubscription($event, $id),
                 RevolutWebhookEvent::OrderCompleted,
                 RevolutWebhookEvent::OrderPaymentDeclined,
                 RevolutWebhookEvent::OrderPaymentFailed,
-                RevolutWebhookEvent::OrderFailed => $this->syncOrder($event, $payload->id),
+                RevolutWebhookEvent::OrderFailed => $this->syncOrder($event, $id),
             };
         } catch (RevolutApiException $exception) {
             if ($exception->statusCode !== 404) {
@@ -91,10 +111,37 @@ class RevolutWebhookSynchronizer
 
             // A deterministic 404 would otherwise retry forever — acknowledge.
             $this->logger->warning('Revolut webhook references a missing resource', [
-                'id' => $payload->id,
+                'id' => $id,
                 'event' => $event->value,
             ]);
+
+            // And false, not true: the resource is gone, so nothing was applied. The old
+            // controller dispatched WebhookHandled unconditionally after this call, so
+            // this quietly changes that — deliberately. An app listening to WebhookHandled
+            // is asking "did local state change?", and here it did not.
+            return false;
         }
+
+        return true;
+    }
+
+    /**
+     * The resource this event is about.
+     *
+     * Revolut names it differently per event group and the body carries nothing else of
+     * use — every sync refetches by this id.
+     *
+     * @param  array<string, mixed>  $body
+     */
+    private function resourceId(array $body): string
+    {
+        foreach (['order_id', 'subscription_id', 'id'] as $key) {
+            if (is_string($body[$key] ?? null)) {
+                return $body[$key];
+            }
+        }
+
+        return '';
     }
 
     /**

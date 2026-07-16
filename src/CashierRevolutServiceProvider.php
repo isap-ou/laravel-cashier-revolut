@@ -8,13 +8,12 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\ServiceProvider;
-use Isapp\CashierRevolut\Commands\WebhookCommand;
 use Isapp\CashierRevolut\Http\RevolutConnector;
 use Isapp\CashierRevolut\Models\RevolutCustomer;
 use Isapp\CashierRevolut\Models\RevolutInvoice;
 use Isapp\CashierRevolut\Models\RevolutSubscription;
 use Isapp\CashierRevolut\Models\RevolutSubscriptionItem;
-use Isapp\CashierRevolut\Webhooks\RevolutWebhookHandler;
+use Isapp\CashierRevolut\Webhooks\RevolutWebhookVerifier;
 use Isapp\CashierSupport\Facades\Cashier;
 
 class CashierRevolutServiceProvider extends ServiceProvider
@@ -30,10 +29,10 @@ class CashierRevolutServiceProvider extends ServiceProvider
 
         $this->app->singleton(RevolutConnector::class);
 
-        $this->app->singleton(RevolutWebhookHandler::class, static function (): RevolutWebhookHandler {
+        $this->app->singleton(RevolutWebhookVerifier::class, static function (): RevolutWebhookVerifier {
             $secret = config('cashier-revolut.webhook.signing_secret');
 
-            return new RevolutWebhookHandler(
+            return new RevolutWebhookVerifier(
                 signingSecret: is_string($secret) ? $secret : null,
                 tolerance: (int) config('cashier-revolut.webhook.tolerance', 300),
             );
@@ -59,7 +58,6 @@ class CashierRevolutServiceProvider extends ServiceProvider
 
         Cashier::extend('revolut', static fn (Application $app): RevolutGateway => $app->make(RevolutGateway::class));
 
-        $this->loadRoutesFrom(__DIR__.'/../routes/webhook.php');
         $this->loadTranslationsFrom(__DIR__.'/../lang', 'cashier-revolut');
 
         if ($this->app->runningInConsole()) {
@@ -71,9 +69,6 @@ class CashierRevolutServiceProvider extends ServiceProvider
                 __DIR__.'/../lang' => $this->app->langPath('vendor/cashier-revolut'),
             ], 'cashier-revolut-lang');
 
-            $this->commands([
-                WebhookCommand::class,
-            ]);
         }
     }
 }

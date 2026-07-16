@@ -13,13 +13,10 @@ use Isapp\CashierRevolut\Tests\Fixtures\RevolutApi;
 use Isapp\CashierRevolut\Tests\Fixtures\Team;
 use Isapp\CashierRevolut\Tests\Fixtures\User;
 use Isapp\CashierRevolut\Tests\TestCase;
-use Isapp\CashierRevolut\Webhooks\RevolutWebhookHandler;
 use Isapp\CashierRevolut\Webhooks\RevolutWebhookSynchronizer;
-use Isapp\CashierSupport\DTO\WebhookPayload;
 use Isapp\CashierSupport\Enums\BillingReason;
 use Isapp\CashierSupport\Enums\PaymentStatus;
 use Isapp\CashierSupport\Enums\SubscriptionStatus;
-use Isapp\CashierSupport\Enums\WebhookEvent;
 use Isapp\CashierSupport\Events\PaymentFailed;
 use Isapp\CashierSupport\Events\PaymentSucceeded;
 use Isapp\CashierSupport\Events\SubscriptionCanceled;
@@ -35,10 +32,52 @@ class WebhookSyncTest extends TestCase
         return $this->app->make(RevolutWebhookSynchronizer::class);
     }
 
-    private function payload(string $event): WebhookPayload
+    /**
+     * The raw Revolut body, which is what handle() takes now.
+     *
+     * It used to build a DTO\WebhookPayload through parseWebhook(), and the round trip
+     * was pure ceremony: the synchronizer dug the Revolut-native 'event' key back out of
+     * the DTO's supposedly provider-agnostic $data (support#46) and never read the
+     * agnostic field beside it.
+     *
+     * @return array<string, mixed>
+     */
+    private function payload(string $event): array
     {
-        return $this->app->make(RevolutWebhookHandler::class)
-            ->parseWebhook(json_encode(RevolutApi::webhookEvent($event)) ?: '{}', []);
+        return RevolutApi::webhookEvent($event);
+    }
+
+    public function test_an_unmapped_event_is_not_handled_and_is_not_an_error(): void
+    {
+        // THE rule support#47 puts on a driver, tested where it lives — the class that
+        // decides. It is the exact inversion of what this package did: parseWebhook()
+        // threw UnexpectedWebhookEventException for PAYOUT_INITIATED and the driver's own
+        // controller caught that ABOVE the WebhookReceived dispatch, so all 14 of the
+        // events Revolut documents and this driver does not map reached no listener at
+        // all. Throwing here would strand them again, one layer down.
+        //
+        // No Http::fake(): nothing may be refetched for an event we have no handler for.
+        $this->assertFalse($this->synchronizer()->handle([
+            'event' => 'PAYOUT_INITIATED',
+            'id' => 'po_1',
+        ]));
+    }
+
+    public function test_a_mapped_event_with_no_resource_id_is_not_handled_either(): void
+    {
+        // Mapped, but the body names nothing to apply it to — so nothing was applied, and
+        // false is the honest answer. It shares the arm with an unmapped event because the
+        // caller's question is the same one: did local state change?
+        $this->assertFalse($this->synchronizer()->handle(['event' => 'ORDER_COMPLETED']));
+    }
+
+    public function test_an_applied_event_says_so(): void
+    {
+        // The true arm, asserted rather than assumed: it is what support dispatches
+        // WebhookHandled on, and the other three tests here only pin false.
+        RevolutApi::fake();
+
+        $this->assertTrue($this->synchronizer()->handle($this->payload('ORDER_COMPLETED')));
     }
 
     public function test_a_dashboard_cancellation_updates_the_local_subscription(): void
@@ -266,17 +305,11 @@ class WebhookSyncTest extends TestCase
         $this->assertSame(1, RevolutInvoice::query()->count());
     }
 
-    public function test_an_overdue_subscription_maps_to_past_due_not_updated(): void
-    {
-        $payload = $this->payload('SUBSCRIPTION_OVERDUE');
-
-        $this->assertSame(WebhookEvent::SubscriptionPastDue, $payload->event);
-    }
-
     public function test_an_overdue_subscription_dispatches_past_due_not_updated(): void
     {
-        // The payload mapping is only half the signal — the typed event is what
-        // an app listens to, and it used to be SubscriptionUpdated.
+        // The typed event is the whole signal now, and it is what an app listens to.
+        // It used to be SubscriptionUpdated, and there used to be a DTO carrying an
+        // agnostic name beside it — which nothing read. This is what survived.
         Event::fake([SubscriptionPastDue::class, SubscriptionUpdated::class]);
         RevolutApi::fake([
             '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(RevolutApi::subscription([
@@ -643,7 +676,11 @@ class WebhookSyncTest extends TestCase
         ]);
 
         // Must not throw — a deterministic 404 would loop deliveries forever.
-        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
+        // And false, not true: the resource is gone, so nothing was applied. The old
+        // controller dispatched WebhookHandled unconditionally after this call, so this
+        // is a real change to what an app sees, and it was going unasserted — flipping
+        // the arm back to `true` left the whole suite green.
+        $this->assertFalse($this->synchronizer()->handle($this->payload('ORDER_COMPLETED')));
 
         $this->assertDatabaseCount('cashier_invoices', 0);
     }

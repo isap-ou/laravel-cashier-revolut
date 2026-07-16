@@ -257,12 +257,22 @@ Register a webhook with Revolut (prints the signing secret to store in
 `REVOLUT_WEBHOOK_SECRET`):
 
 ```bash
-php artisan cashier-revolut:webhook https://your-app.test/webhook/revolut
+php artisan cashier:webhook revolut
 ```
 
-Incoming webhooks are verified (HMAC-SHA256 over `v1.{timestamp}.{body}`) and
-dispatched as the support package's `WebhookReceived` / `WebhookHandled` events,
-carrying Revolut's **raw decoded body**.
+No URL argument: the command reads it from the route cashier-support mounts —
+`webhook/cashier/revolut` by default, configurable there via
+`cashier-support.webhook.prefix`. Passing one by hand is what let a registered webhook
+drift from the route it was supposed to reach, which 404s on every delivery in silence.
+Use `--url=` only for a proxy or tunnel that genuinely differs.
+
+Incoming webhooks arrive at **cashier-support's** route and controller — this driver
+ships neither. It supplies the delivery behind one contract method: verification
+(HMAC-SHA256 over `v1.{timestamp}.{body}`) and what applying an event does. Support
+owns the order the two happen in, which is the whole of #24.
+
+They are dispatched as the support package's `WebhookReceived` / `WebhookHandled`
+events, carrying `$event->provider` (`'revolut'`) and Revolut's **raw decoded body**.
 
 For gateway activity in provider-neutral terms, listen to the **typed** events
 instead — `PaymentSucceeded`, `SubscriptionCreated`, `SubscriptionCanceled`,

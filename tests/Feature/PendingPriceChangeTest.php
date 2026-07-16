@@ -10,7 +10,6 @@ use Isapp\CashierRevolut\Models\RevolutSubscription;
 use Isapp\CashierRevolut\Tests\Fixtures\RevolutApi;
 use Isapp\CashierRevolut\Tests\Fixtures\User;
 use Isapp\CashierRevolut\Tests\TestCase;
-use Isapp\CashierRevolut\Webhooks\RevolutWebhookHandler;
 use Isapp\CashierRevolut\Webhooks\RevolutWebhookSynchronizer;
 use Isapp\CashierSupport\Enums\SwapTiming;
 use Isapp\CashierSupport\Events\SubscriptionPriceChangeScheduled;
@@ -155,8 +154,7 @@ class PendingPriceChangeTest extends TestCase
         ]);
 
         $synchronizer = $this->app->make(RevolutWebhookSynchronizer::class);
-        $payload = $this->app->make(RevolutWebhookHandler::class)
-            ->parseWebhook(json_encode(RevolutApi::webhookEvent('SUBSCRIPTION_INITIATED')) ?: '{}', []);
+        $payload = RevolutApi::webhookEvent('SUBSCRIPTION_INITIATED');
 
         $synchronizer->handle($payload);
 

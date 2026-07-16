@@ -4,18 +4,23 @@ declare(strict_types=1);
 
 namespace Isapp\CashierRevolut\Webhooks;
 
-use Isapp\CashierRevolut\Enums\RevolutWebhookEvent;
-use Isapp\CashierSupport\Contracts\WebhookHandler;
-use Isapp\CashierSupport\DTO\WebhookPayload;
 use Isapp\CashierSupport\Exceptions\InvalidConfigurationException;
-use Isapp\CashierSupport\Exceptions\UnexpectedWebhookEventException;
 use Isapp\CashierSupport\Exceptions\WebhookVerificationException;
 
 /**
- * Verifies Revolut webhook signatures (HMAC-SHA256 over "v1.{timestamp}.{body}")
- * and translates Revolut events into the provider-agnostic WebhookPayload.
+ * Verifies Revolut webhook signatures: HMAC-SHA256 over "v1.{timestamp}.{body}".
+ *
+ * Verification only. It used to be RevolutWebhookHandler and also translated an event
+ * into a provider-agnostic DTO — support#47 took that job away, because that translation
+ * was the part that made an event we do not map inexpressible. What is left does one
+ * thing, so it is named for it.
+ *
+ * It refuses a webhook it cannot verify, and a missing secret is a hard failure rather
+ * than a shrug. Both references disagree: they attach their signature middleware only
+ * `if (config(...secret))` and otherwise accept unsigned webhooks with no throw and no
+ * log line (laravel/cashier's WebhookController.php:29, -paddle's :32).
  */
-class RevolutWebhookHandler implements WebhookHandler
+class RevolutWebhookVerifier
 {
     public function __construct(
         private readonly ?string $signingSecret,
@@ -23,9 +28,12 @@ class RevolutWebhookHandler implements WebhookHandler
     ) {}
 
     /**
-     * {@inheritDoc}
+     * @param  array<string, string>  $headers
+     *
+     * @throws WebhookVerificationException When the signature cannot be verified.
+     * @throws InvalidConfigurationException When no signing secret is configured.
      */
-    public function verifyWebhook(string $payload, array $headers): void
+    public function verify(string $payload, array $headers): void
     {
         if ($this->signingSecret === null || $this->signingSecret === '') {
             throw InvalidConfigurationException::missingKey('cashier-revolut.webhook.signing_secret');
@@ -65,42 +73,6 @@ class RevolutWebhookHandler implements WebhookHandler
         $value = (int) $timestamp;
 
         return $value > 9_999_999_999 ? intdiv($value, 1000) : $value;
-    }
-
-    /**
-     * {@inheritDoc}
-     *
-     * @throws UnexpectedWebhookEventException When the event is not one this driver subscribes to.
-     */
-    public function parseWebhook(string $payload, array $headers): WebhookPayload
-    {
-        $decoded = json_decode($payload, true);
-        /** @var array<string, mixed> $data */
-        $data = is_array($decoded) ? $decoded : [];
-
-        $raw = is_string($data['event'] ?? null) ? $data['event'] : '';
-        $event = RevolutWebhookEvent::tryFrom($raw)
-            ?? throw UnexpectedWebhookEventException::forEvent($raw);
-
-        return new WebhookPayload(
-            event: $event->toWebhookEvent(),
-            id: $this->resourceId($data),
-            data: $data,
-        );
-    }
-
-    /**
-     * @param  array<string, mixed>  $data
-     */
-    private function resourceId(array $data): string
-    {
-        foreach (['order_id', 'subscription_id', 'id'] as $key) {
-            if (is_string($data[$key] ?? null)) {
-                return $data[$key];
-            }
-        }
-
-        return '';
     }
 
     /**

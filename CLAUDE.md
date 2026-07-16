@@ -60,14 +60,18 @@ src/
 ├── Builders/
 │   └── RevolutSubscriptionBuilder.php  # implements SubscriptionBuilder
 │
-├── Webhooks/
-│   ├── RevolutWebhookHandler.php   # implements WebhookHandler
-│   └── RevolutWebhookController.php
+├── Webhooks/                       # No controller, no route: cashier-support owns the
+│   │                               # entry point (webhook/cashier/{provider}) and the
+│   │                               # ORDER of verify → announce → apply. That order was #24.
+│   ├── RevolutIncomingWebhook.php  # implements Support\Contracts\IncomingWebhook
+│   ├── RevolutWebhookVerifier.php  # HMAC-SHA256 over v1.{timestamp}.{body}
+│   └── RevolutWebhookSynchronizer.php  # applies an event; returns false for the 14 we
+│                                       # do not map — and never throws for them
 │
-├── Events/                         # Revolut-specific events
-│
-├── Commands/
-│   └── WebhookCommand.php          # php artisan cashier-revolut:webhook
+│   # No Events/ — this driver defines no event classes. Everything it dispatches is a
+│   # Isapp\CashierSupport\Events\* class. (This tree claimed an Events/ that never existed.)
+│   # No Commands/ — `php artisan cashier:webhook revolut` lives in support, and takes its
+│   # URL from support's named route so it cannot drift from where the webhook is mounted.
 │
 ├── config/
 │   └── cashier-revolut.php
@@ -79,8 +83,7 @@ src/
 │       └── (none — the customer identity lives in the support package's
 │            cashier_customers table, not in a column on the app's users table)
 │
-└── routes/
-    └── webhook.php
+└── (no routes/ — cashier-support mounts webhook/cashier/{provider} for every driver)
 ```
 
 ## Mapping Stripe → Revolut
@@ -138,9 +141,9 @@ outlives any one issue, and does not restate them — a ticket list copied into 
 silently, and this file has no test over it. Two shapes matter here:
 
 **The webhook escape hatch is open (#24), and the shape of how it got there is the lesson.**
-`WebhookReceived` fires for every *verified* body, above `parseWebhook()` and every decision about
-what the event means — so the **14 of Revolut's 22 documented events we do not map** now reach a
-listener carrying the raw body, instead of vanishing behind a 200. They include every `DISPUTE_*`;
+`WebhookReceived` fires for every *verified* body, above every decision about what the event
+means — so the **14 of Revolut's 22 documented events we do not map** reach a listener carrying
+the raw body, instead of vanishing behind a 200. They include every `DISPUTE_*`;
 `DISPUTE_ACTION_REQUIRED` is the one with a deadline attached. (3DS was always a lesser case than
 it looks: `ORDER_PAYMENT_AUTHENTICATION_CHALLENGED` is unmapped too, but an app can *poll*
 `GET /orders/{id}` for it — see `.claude/rules/revolut-api.md`. What the gap cost there was push,
@@ -151,10 +154,16 @@ keeping. `WebhookReceived` carried a typed `Support\DTO\WebhookPayload` whose `$
 non-nullable 8-case enum, so for an unmapped event the payload could not be *constructed* — there
 was nothing to move, and every driver-side route out (mapping it onto a wrong case, subclassing
 the DTO, inventing a driver event) was worse than the bug. Support moved first, which is where
-`.claude/rules/sources-of-truth.md` puts it: its #42 made `WebhookReceived`/`WebhookHandled` carry
-the provider's **raw decoded body**, as both references always have. Only then did the reorder
-here become four lines. `parseWebhook()` still throws for an unmapped event and that is now
-harmless — the hatch has already fired above it.
+`.claude/rules/sources-of-truth.md` puts it: its #42 made the events carry the provider's **raw
+decoded body**, as both references always have.
+
+**And then support took the ordering away entirely (#47), which is the real ending.** The reorder
+was four lines — but four lines each new driver would get a fresh chance to write wrong, for a
+bug whose symptom is silence. So the route, the controller and the sequence live in support now;
+this package ships `RevolutIncomingWebhook` and nothing HTTP-shaped. The rule that replaced the
+ordering is one sentence on one method: **`pipeline()` returns `false` for an event we do not map,
+and never throws.** If you are about to make it throw because that reads more honestly — that
+instinct is exactly what #24 was, and `WebhookSyncTest` will stop you.
 
 Whether to *map* any of the other 14 is a separate, open question: it needs "does a payout belong
 in a provider-agnostic contract at all" answered first, and it is not what the hatch is for.

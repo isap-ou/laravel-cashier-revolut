@@ -59,6 +59,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`php artisan cashier:webhook revolut` replaces `cashier-revolut:webhook`**, and it no
+  longer takes the URL as an argument — it reads it from the route cashier-support mounts
+  (`webhook/cashier/revolut`). Requires `isapp/laravel-cashier-support` #47/#48.
+
+  The old command defaulted its URL from `cashier-revolut.webhook.path`, a key that only
+  this package's route ever read. Two sources of truth for one address: the day they
+  disagreed, the webhook was registered against a URL that answers 404 on every delivery —
+  no error, no log, subscriptions simply stop updating. Stripe has always taken the named
+  route instead, and now so do we.
+
+  The gateway call itself is still this driver's, behind `Contracts\RegistersWebhooks` —
+  an interface rather than a `Capability` because Paddle ships **no** command at all, so
+  "the method does not exist" *is* the declaration. Its partial-failure path survives
+  intact and matters: Revolut can register the endpoint and return no `signing_secret`, and
+  that now throws rather than returning a secret-less result, because the endpoint exists
+  by then and a blind retry accumulates duplicates.
+
+  Gone with it: `routes/webhook.php`, `RevolutWebhookController`, the
+  `cashier-revolut.webhook.path` / `.middleware` config keys (both live in
+  `cashier-support.webhook.*` now, for every driver at once), and the `illuminate/routing`
+  dependency. `webhook.signing_secret` / `.tolerance` / `.sync_timeout` stay — none of them
+  were ever about HTTP routing.
+
+- **`RevolutWebhookHandler` is `RevolutWebhookVerifier`, and only verifies.** It used to
+  also translate an event into a provider-agnostic DTO; that translation is what made an
+  unmapped event inexpressible, and it is gone with `Support\DTO\WebhookPayload` and
+  `Support\Enums\WebhookEvent` (support#46/#47). What is left does one thing, so it is
+  named for it. `RevolutWebhookEvent::toWebhookEvent()` is gone for the same reason —
+  nothing read its result. Agnostic meaning travels on the typed events the synchronizer
+  dispatches, which carry the billable and a real DTO rather than a name.
+
+- **`RevolutWebhookSynchronizer::handle()` takes the raw body and returns `bool`.** It took
+  a `WebhookPayload` and then dug `$payload->data['event']` — a Revolut-native key — back
+  out of a field that DTO called "provider-agnostic event data", while never reading the
+  agnostic field beside it. That was the whole of support#46, proven by its only reader.
+  The `bool` is what support's controller dispatches `WebhookHandled` on.
+
+  One behaviour changed quietly and deliberately: a **404 from the refetch** (the resource
+  vanished at Revolut) is still acknowledged and logged, but now reports `false`. The old
+  controller dispatched `WebhookHandled` unconditionally after this call — an app listening
+  to it is asking "did local state change?", and there the answer was no.
+
 - **`withMetadata()` throws instead of silently losing the data.** The driver sent a
   `metadata` field on `POST /api/subscriptions`; the API documents five fields and that
   is not one of them, and no subscription endpoint returns it. Revolut ignored it, so an
@@ -125,17 +167,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   `event(new WebhookReceived(...))` sat **below** `parseWebhook()`, which throws
   `UnexpectedWebhookEventException` for exactly those 14 — and the controller caught it
-  and returned first, so the dispatch was unreachable for every unmapped event. It now
-  sits above the parse and below `verifyWebhook()`, which is where both references put
-  it (`laravel/cashier`'s `Http/Controllers/WebhookController.php:45`, `-paddle`'s `:49`).
+  and returned first, so the dispatch was unreachable for every unmapped event.
 
-  **The reorder is four lines, and it still needed support to move first.** The event
-  carried a typed `Support\DTO\WebhookPayload` whose `$event` was a non-nullable 8-case
-  enum: for an unmapped event the payload could not be *constructed*, so there was
-  nothing to hoist. Support#42 made `WebhookReceived`/`WebhookHandled` carry the raw
-  decoded body — as the references always have — and only then was there something to
-  move. `parseWebhook()` still throws for an unmapped event, which is now harmless: the
-  hatch has already fired above it.
+  **The fix was four lines, and it is not four lines any more — the ordering left this
+  package entirely.** Support#47 took the route, the controller and the sequence, because
+  four generic lines that every driver must interleave correctly, for a bug whose only
+  symptom is silence, is not a thing to hand to each new driver. This package now ships
+  `RevolutIncomingWebhook` — `parse()` (verify + read) and `pipeline()` (apply) — and
+  nothing HTTP-shaped at all.
+
+  **The rule that replaced the ordering is one sentence: `pipeline()` returns `false` for
+  an event this driver does not map, and never throws.** That is the exact inversion of
+  what `parseWebhook()` did, and it is pinned in three places, because an inverted rule
+  nobody pins gets re-inverted by the next person who finds the old way more intuitive —
+  it *was* more intuitive, and it was #24.
 
   Unchanged on purpose: an unmapped event still answers `200 "Webhook ignored."`, because
   Revolut retries a 4XX three times ten minutes apart and retrying an event we have no
@@ -145,17 +190,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Signature verification still runs first, and that matters more now that the hatch is
   wide: an unverified body is not an event, and this is exactly where anyone who could
-  reach the URL would fabricate one. A test pins the ordering rather than trusting it.
+  reach the URL would fabricate one. Support fixes *when* it runs by calling `parse()`
+  above the dispatch; it cannot prove this package verifies *inside* it, so that half is
+  pinned here — including the case where only `pipeline()` is called, which must verify
+  too rather than trusting a caller's sequencing.
 
-  **A body we cannot read still reaches no listener**, and that needed saying in code
-  rather than assuming. It is not an unmapped event: dispatching `WebhookReceived([])`
-  for it would hand a listener a content-free event indistinguishable from a real
-  unmapped one — the same lie the reorder exists to end, told the other way round. The
-  references never dispatch one either (Stripe reads `$payload['type']` *before* its
-  dispatch). A body that is not a JSON **object** — unparseable, a scalar, `null`, or a
-  JSON list — is acknowledged with the same 200 and an info log, and fires nothing. The
-  list case also earns the `array<string, mixed>` the event declares, instead of
-  asserting it: `json_decode('[1,2]', true)` has int keys.
+  **A body we cannot read still reaches no listener**, and the guard for it is this
+  package's now — support cannot check a body it never decodes. It is not an unmapped
+  event: dispatching `WebhookReceived([])` for it would hand a listener a content-free
+  event indistinguishable from a real unmapped one — the same lie told the other way
+  round. The references never dispatch one either (Stripe reads `$payload['type']`
+  *before* its dispatch). A body that is not a JSON **object** — unparseable, a scalar,
+  `null`, or a JSON list — is acknowledged with the same 200 and an info log, and fires
+  nothing. The list case also earns the `array<string, mixed>` `parse()` declares instead
+  of asserting it: `json_decode('[1,2]', true)` has int keys, and PHP calls it an array.
 
   This path had no test before, on either side of the change; it has five now.
 

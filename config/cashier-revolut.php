@@ -45,13 +45,16 @@ return [
     | (wsk_...). tolerance is the maximum age (seconds) of a webhook request
     | before it is rejected as a possible replay.
     |
+    | The route lives in cashier-support and serves every driver, so its path and
+    | middleware are configured there (cashier-support.webhook.*) and no longer
+    | here. Register it with `php artisan cashier:webhook revolut`, which reads
+    | the URL from that route.
+    |
     */
     'webhook' => [
         'signing_secret' => env('REVOLUT_WEBHOOK_SECRET'),
-        'path' => env('REVOLUT_WEBHOOK_PATH', 'webhook/revolut'),
         'tolerance' => max(0, (int) env('REVOLUT_WEBHOOK_TOLERANCE', 300)),
         'sync_timeout' => max(1, (int) env('REVOLUT_WEBHOOK_SYNC_TIMEOUT', 5)),
-        'middleware' => ['throttle:60,1'],
     ],
 
     /*
