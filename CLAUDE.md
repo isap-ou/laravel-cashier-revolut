@@ -125,32 +125,33 @@ CASHIER_CURRENCY_LOCALE=en_IE
 
 ## Known divergences from the reference drivers (audited 2026-07-14)
 
-Both reference `WebhookController`s were compared against ours method-by-method. Two open
-issues — **do not work around either locally, and do not assume the webhook layer is done**:
+Both reference `WebhookController`s were compared against ours method-by-method. **Do not work
+around a gap locally, and do not assume the webhook layer is done.** For what is open:
 
-- **#24** (bug, **blocked on support — not fixable in this repo**) — `WebhookReceived` is
-  dispatched at `RevolutWebhookController.php:78`, i.e. **after** `parseWebhook()` (`:64`). An
-  event type outside the 8 cases of `RevolutWebhookEvent` throws, is caught, and returns a bare
-  200 (`:65-75`) — so it never reaches a listener. In both references `WebhookReceived` fires
-  *first*, precisely so it is the universal escape hatch for events the package does not map.
-  We also removed the other escape hatch: the references let an app subclass `WebhookController`
-  and add `handleXxx()`, while `RevolutWebhookSynchronizer` is `private` methods behind a closed
-  `match` (`:77-86`). **Net: an app cannot react to any event we did not map.**
+```bash
+gh issue list --repo isap-ou/laravel-cashier-revolut   # what is open, right now
+```
 
-  **Why the reorder cannot just be done here.** The references dispatch a raw `array`, so any
-  event type travels. We dispatch a typed `Support\DTO\WebhookPayload` whose `$event` is a
-  non-nullable `WebhookEvent` — an 8-case closed enum with no case for an unmapped event. So the
-  event cannot be *constructed*, let alone dispatched. Support must move first: `$event` has to
-  go nullable alongside a raw provider event string, or gain an `Unknown` case. Until then the
-  driver-side routes are all worse than the bug (map it onto some other case → a payout is
-  credited as a payment; subclass the DTO and leave `$event` unset → the app's listener throws
-  on read), and `tests/Feature/WebhookControllerTest.php` carries the acceptance test as a
-  documented skip. Once support lands: delete the skip, hoist `event(new WebhookReceived(...))`
-  above `parseWebhook()`, keep it below `verifyWebhook()`.
-- **#25** — no customer-lifecycle webhooks at all. Stripe handles customer updated/deleted and
-  payment-method auto-update (`WebhookController.php:240-286`); we handle none, so a customer
-  deleted at Revolut leaves a local record claiming an active subscription against a dead id.
-  Pairs with support#36 (no local → gateway sync) — the drift is bidirectional.
+**That command is the status; this section is not.** It carries the *shape* of the gaps, which
+outlives any one issue, and does not restate them — a ticket list copied into a doc drifts
+silently, and this file has no test over it. Two shapes matter here:
+
+**The webhook escape hatch is missing, and this repo cannot restore it (#24).**
+`WebhookReceived` is meant to fire for every *verified* payload, before any dispatch decision, so
+an app can react to an event the package never mapped. Ours fires after `parseWebhook()`, so
+anything outside `RevolutWebhookEvent`'s 8 cases is acknowledged with a 200 and vanishes.
+**It is not a reorder.** The references dispatch a raw array, so any event type travels; we
+dispatch a typed `Support\DTO\WebhookPayload` whose `$event` is a non-nullable 8-case enum — for
+an unmapped event the payload cannot be *constructed*, so there is nothing to move. Support moves
+first, which is also where `.claude/rules/sources-of-truth.md` puts it; every driver-side route
+out is worse than the bug, including the one that compiles. The detail lives on the issue and in
+`tests/Feature/WebhookControllerTest.php`, where the acceptance test is skipped behind a tripwire
+that asserts the blocker still holds — so it goes red the day support moves.
+
+**Nothing reconciles the customer record when it changes at the gateway (#25).** We handle no
+customer-lifecycle webhooks, so a customer deleted at Revolut leaves a local record claiming an
+active subscription against a dead id. Pairs with support#36 (no local → gateway sync): the drift
+is bidirectional, so fixing either half alone still leaves the records able to diverge.
 
 Where this driver is deliberately **better** than the references (keep it): signature
 verification is mandatory and a missing secret is a hard failure (both references silently skip
