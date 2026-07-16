@@ -4,30 +4,35 @@ declare(strict_types=1);
 
 namespace Isapp\CashierRevolut\Concerns;
 
-use Isapp\CashierRevolut\Webhooks\RevolutWebhookHandler;
-use Isapp\CashierSupport\DTO\WebhookPayload;
+use Isapp\CashierRevolut\Webhooks\RevolutIncomingWebhook;
+use Isapp\CashierRevolut\Webhooks\RevolutWebhookSynchronizer;
+use Isapp\CashierRevolut\Webhooks\RevolutWebhookVerifier;
+use Isapp\CashierSupport\Contracts\IncomingWebhook;
 
 /**
- * Delegates the gateway's webhook responsibilities to the injected
- * RevolutWebhookHandler.
+ * The gateway's whole webhook surface: hand back a delivery.
+ *
+ * It used to be verifyWebhook() + parseWebhook(), both delegated straight through. The
+ * delivery replaces them because verifying and applying need the same raw bytes, and a
+ * per-delivery object takes them once instead of asking the caller to pass the same pair
+ * twice and trusting it did.
  */
 trait HandlesRevolutWebhooks
 {
-    protected RevolutWebhookHandler $webhooks;
+    protected RevolutWebhookVerifier $webhookVerifier;
+
+    protected RevolutWebhookSynchronizer $webhookSynchronizer;
 
     /**
      * {@inheritDoc}
      */
-    public function verifyWebhook(string $payload, array $headers): void
+    public function webhook(string $content, array $headers): IncomingWebhook
     {
-        $this->webhooks->verifyWebhook($payload, $headers);
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public function parseWebhook(string $payload, array $headers): WebhookPayload
-    {
-        return $this->webhooks->parseWebhook($payload, $headers);
+        return new RevolutIncomingWebhook(
+            $content,
+            $headers,
+            $this->webhookVerifier,
+            $this->webhookSynchronizer,
+        );
     }
 }

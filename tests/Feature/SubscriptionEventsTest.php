@@ -10,7 +10,6 @@ use Isapp\CashierRevolut\Models\RevolutSubscription;
 use Isapp\CashierRevolut\Tests\Fixtures\RevolutApi;
 use Isapp\CashierRevolut\Tests\Fixtures\User;
 use Isapp\CashierRevolut\Tests\TestCase;
-use Isapp\CashierRevolut\Webhooks\RevolutWebhookHandler;
 use Isapp\CashierRevolut\Webhooks\RevolutWebhookSynchronizer;
 use Isapp\CashierSupport\Events\SubscriptionCanceled;
 use Isapp\CashierSupport\Events\SubscriptionCreated;
@@ -52,8 +51,7 @@ class SubscriptionEventsTest extends TestCase
 
     private function syncSubscriptionWebhook(string $event): void
     {
-        $payload = $this->app->make(RevolutWebhookHandler::class)
-            ->parseWebhook(json_encode(RevolutApi::webhookEvent($event)) ?: '{}', []);
+        $payload = RevolutApi::webhookEvent($event);
 
         $this->app->make(RevolutWebhookSynchronizer::class)->handle($payload);
     }

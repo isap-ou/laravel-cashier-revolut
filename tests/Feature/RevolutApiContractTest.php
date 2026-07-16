@@ -6,20 +6,22 @@ namespace Isapp\CashierRevolut\Tests\Feature;
 
 use Illuminate\Support\Facades\Http;
 use Isapp\CashierRevolut\Enums\RevolutPaymentMethodType;
+use Isapp\CashierRevolut\Enums\RevolutWebhookEvent;
 use Isapp\CashierRevolut\Exceptions\RevolutApiException;
 use Isapp\CashierRevolut\Http\Responses\OrderResponse;
 use Isapp\CashierRevolut\Http\Responses\SubscriptionResponse;
 use Isapp\CashierRevolut\Tests\Fixtures\RevolutApi;
 use Isapp\CashierRevolut\Tests\Fixtures\User;
 use Isapp\CashierRevolut\Tests\TestCase;
-use Isapp\CashierRevolut\Webhooks\RevolutWebhookHandler;
+use Isapp\CashierRevolut\Webhooks\RevolutIncomingWebhook;
+use Isapp\CashierRevolut\Webhooks\RevolutWebhookSynchronizer;
+use Isapp\CashierRevolut\Webhooks\RevolutWebhookVerifier;
 use Isapp\CashierSupport\Contracts\GatewayProvider;
 use Isapp\CashierSupport\DTO\CheckoutRequest;
 use Isapp\CashierSupport\Enums\Currency;
 use Isapp\CashierSupport\Enums\PaymentStatus;
 use Isapp\CashierSupport\Enums\SubscriptionStatus;
 use Isapp\CashierSupport\Enums\SwapTiming;
-use Isapp\CashierSupport\Enums\WebhookEvent;
 use Isapp\CashierSupport\Exceptions\PaymentFailedException;
 use Isapp\CashierSupport\Facades\Cashier;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -341,55 +343,67 @@ class RevolutApiContractTest extends TestCase
     }
 
     /**
-     * @return array<string, array{string, WebhookEvent, string}>
+     * @return array<string, array{string, string}>
      */
     public static function webhookEventProvider(): array
     {
         return [
-            'ORDER_COMPLETED' => ['ORDER_COMPLETED', WebhookEvent::PaymentSucceeded, RevolutApi::ORDER_ID],
-            'ORDER_PAYMENT_FAILED' => ['ORDER_PAYMENT_FAILED', WebhookEvent::PaymentFailed, RevolutApi::ORDER_ID],
-            'ORDER_PAYMENT_DECLINED' => ['ORDER_PAYMENT_DECLINED', WebhookEvent::PaymentFailed, RevolutApi::ORDER_ID],
-            'SUBSCRIPTION_INITIATED' => ['SUBSCRIPTION_INITIATED', WebhookEvent::SubscriptionCreated, RevolutApi::SUBSCRIPTION_ID],
-            'SUBSCRIPTION_CANCELLED' => ['SUBSCRIPTION_CANCELLED', WebhookEvent::SubscriptionCanceled, RevolutApi::SUBSCRIPTION_ID],
-            // A failed payment is past-due, not "the subscription was updated" —
-            // that mapping was overloading SubscriptionUpdated a second time.
-            'SUBSCRIPTION_OVERDUE' => ['SUBSCRIPTION_OVERDUE', WebhookEvent::SubscriptionPastDue, RevolutApi::SUBSCRIPTION_ID],
+            'ORDER_COMPLETED' => ['ORDER_COMPLETED', RevolutApi::ORDER_ID],
+            'ORDER_PAYMENT_FAILED' => ['ORDER_PAYMENT_FAILED', RevolutApi::ORDER_ID],
+            'ORDER_PAYMENT_DECLINED' => ['ORDER_PAYMENT_DECLINED', RevolutApi::ORDER_ID],
+            'SUBSCRIPTION_INITIATED' => ['SUBSCRIPTION_INITIATED', RevolutApi::SUBSCRIPTION_ID],
+            'SUBSCRIPTION_CANCELLED' => ['SUBSCRIPTION_CANCELLED', RevolutApi::SUBSCRIPTION_ID],
+            'SUBSCRIPTION_OVERDUE' => ['SUBSCRIPTION_OVERDUE', RevolutApi::SUBSCRIPTION_ID],
         ];
     }
 
+    /**
+     * A documented body names its resource where this driver looks for it.
+     *
+     * This used to also assert the event's mapping onto a provider-agnostic WebhookEvent.
+     * That enum is gone (support#47) — it was a closed eight-case vocabulary that no
+     * gateway's catalogue is a subset of, and it made an event we do not map impossible to
+     * express. What is left is the part that was ever a fact about Revolut: the body's shape.
+     */
     #[DataProvider('webhookEventProvider')]
-    public function test_documented_webhook_events_map_to_support_events_and_resource_ids(
+    public function test_a_documented_webhook_event_names_its_resource_where_we_read_it(
         string $event,
-        WebhookEvent $expected,
         string $resourceId,
     ): void {
-        $handler = new RevolutWebhookHandler(self::WEBHOOK_SECRET);
+        $body = RevolutApi::webhookEvent($event);
 
-        $payload = json_encode(RevolutApi::webhookEvent($event), JSON_THROW_ON_ERROR);
+        $this->assertNotNull(
+            RevolutWebhookEvent::tryFrom($event),
+            "[{$event}] is documented and this driver does not map it — deliberate for 14 of the 22, "
+            .'but this provider lists the ones it should map.',
+        );
 
-        $parsed = $handler->parseWebhook($payload, []);
-
-        $this->assertSame($expected, $parsed->event);
-        $this->assertSame($resourceId, $parsed->id);
+        // Revolut names it per event group, which is why the synchronizer reads a list of
+        // keys rather than one. If a group ever renamed it, the sync would silently do
+        // nothing: the id would come back '' and the event would read as unhandled.
+        $this->assertSame($resourceId, $body['order_id'] ?? $body['subscription_id'] ?? null);
     }
 
-    public function test_a_signed_documented_webhook_event_passes_verification_and_parses(): void
+    public function test_a_signed_documented_webhook_event_verifies_and_is_read_whole(): void
     {
-        $handler = new RevolutWebhookHandler(self::WEBHOOK_SECRET);
-
         $payload = json_encode(RevolutApi::webhookEvent('ORDER_COMPLETED'), JSON_THROW_ON_ERROR);
         $timestamp = time();
-        $signature = 'v1='.hash_hmac('sha256', "v1.{$timestamp}.{$payload}", self::WEBHOOK_SECRET);
 
-        $handler->verifyWebhook($payload, [
-            'Revolut-Request-Timestamp' => (string) $timestamp,
-            'Revolut-Signature' => $signature,
-        ]);
+        $webhook = new RevolutIncomingWebhook(
+            $payload,
+            [
+                'Revolut-Request-Timestamp' => (string) $timestamp,
+                'Revolut-Signature' => 'v1='.hash_hmac('sha256', "v1.{$timestamp}.{$payload}", self::WEBHOOK_SECRET),
+            ],
+            new RevolutWebhookVerifier(self::WEBHOOK_SECRET),
+            $this->app->make(RevolutWebhookSynchronizer::class),
+        );
 
-        $parsed = $handler->parseWebhook($payload, []);
+        $body = $webhook->parse();
 
-        $this->assertSame(WebhookEvent::PaymentSucceeded, $parsed->event);
-        $this->assertSame(RevolutApi::ORDER_ID, $parsed->id);
-        $this->assertSame('Test #3928', $parsed->data['merchant_order_ext_ref']);
+        // Whole, not normalized: the body reaches an app's WebhookReceived listener exactly
+        // as Revolut sent it, down to fields this driver has no interest in.
+        $this->assertSame(RevolutApi::ORDER_ID, $body['order_id']);
+        $this->assertSame('Test #3928', $body['merchant_order_ext_ref']);
     }
 }
