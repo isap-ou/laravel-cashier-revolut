@@ -48,6 +48,13 @@ trait PersistsRevolutPlanVariation
             // create), and cashier_subscription_items carries no unique index
             // on subscription_id — it stays multi-item for other drivers — so
             // two writers that both miss the row would both insert one.
+            //
+            // support's unique(subscription_id, price) does not remove the need
+            // for this lock, and is not what it protects against: it would turn
+            // the racing insert of the SAME variation into a constraint
+            // violation rather than a duplicate, but a race between two
+            // DIFFERENT variations — the swap case — writes two distinct pairs,
+            // which the constraint permits and only the lock orders.
             $record->newQuery()->whereKey($record->getKey())->lockForUpdate()->first();
 
             $model = Cashier::subscriptionItemModel(RevolutGateway::DRIVER);
