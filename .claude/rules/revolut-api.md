@@ -52,9 +52,13 @@ create, and usage records. `POST /orders` and `POST /orders/{id}/payments` accep
   of `cancel` and `change_plan_variation`. `change-plan` is `at_cycle_end` and nothing else.
 - Cancelling an already `cancelled`/`finished` subscription is refused.
 - Webhooks: acknowledged by any 200-399; a 4XX is retried 3 more times, 10 minutes apart.
-  The catalogue is **18 event types**, verified against the `events` enum of `create-webhook`
-  / `update-webhook` (identical in both). There is no refund event, no renewal event and no
-  plan-change event — but do not read that as "the catalogue is small":
+  The catalogue is **22 event types in 5 groups**, verified against the `events` enum of
+  `create-webhook` / `update-webhook` (identical in both) and cross-checked against the
+  embedded JSON of `/docs/api-reference/merchant/`, which yields the same 22 and no others.
+  There is no refund event, no renewal event and no plan-change event — but do not read that
+  as "the catalogue is small", and **count the table rows before quoting a number**: the
+  first draft of this block said 18 because its author grepped for `ORDER_|SUBSCRIPTION_|
+  PAYOUT` and never saw the `Dispute` row.
 
   | Group | Events |
   |---|---|
@@ -62,7 +66,17 @@ create, and usage records. `POST /orders` and `POST /orders/{id}/payments` accep
   | Payment | `ORDER_PAYMENT_AUTHENTICATION_CHALLENGED`, `ORDER_PAYMENT_AUTHENTICATED`, `ORDER_PAYMENT_DECLINED`, `ORDER_PAYMENT_FAILED` |
   | Subscription | `SUBSCRIPTION_INITIATED`, `SUBSCRIPTION_FINISHED`, `SUBSCRIPTION_CANCELLED`, `SUBSCRIPTION_OVERDUE` |
   | Payout | `PAYOUT_INITIATED`, `PAYOUT_COMPLETED`, `PAYOUT_FAILED` |
+  | Dispute | `DISPUTE_ACTION_REQUIRED`, `DISPUTE_UNDER_REVIEW`, `DISPUTE_WON`, `DISPUTE_LOST` |
 
-  `RevolutWebhookEvent` maps **8 of those 18**. Every case it maps is real; the other 10 are
+  `RevolutWebhookEvent` maps **8 of those 22**. Every case it maps is real; the other 14 are
   received and dropped with a 200 (that is the driver half of #24). Nothing here is a
-  hypothetical future event — they are documented today.
+  hypothetical future event — they are documented today, and the dropped set includes every
+  `DISPUTE_*`, i.e. a customer disputing a charge is invisible to the app.
+
+- A payment going to 3DS is **not** only visible via `ORDER_PAYMENT_AUTHENTICATION_CHALLENGED`.
+  An app can also pull it: `GET /orders/{id}` returns `payments[].state` =
+  `authentication_challenge` plus a `payments[].authentication_challenge` object carrying the
+  challenge details, and `POST /orders/{id}/payments` returns that `state` inline. After the
+  fact, `decline_reason` carries `3ds_challenge_abandoned` / `3ds_challenge_failed_manually`.
+  The unmapped webhook costs an app the *push* signal, not the information — say "must poll",
+  not "cannot know".

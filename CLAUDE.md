@@ -26,8 +26,8 @@ Merchant API capabilities:
 - **Subscription Plans** — plan-based model with variations and phases (trial, monthly, yearly)
 - **Subscriptions** — create, list, get, update, cancel, change plan (no native pause/resume endpoints)
 - **Billing Cycles** — first-class concept with dedicated endpoints per subscription
-- **Webhooks** — **18 documented event types** across Order / Payment / Subscription / Payout.
-  We map 8; the verified enum and the 10 we drop are in `.claude/rules/revolut-api.md`
+- **Webhooks** — **22 documented event types** across Order / Payment / Subscription / Payout /
+  Dispute. We map 8; the verified enum and the 14 we drop are in `.claude/rules/revolut-api.md`
 - **Checkout Widget** — JS widget for accepting payments (analogous to Stripe Elements)
 
 Authorization: API keys from the Revolut Business dashboard.
@@ -140,9 +140,12 @@ silently, and this file has no test over it. Two shapes matter here:
 **The webhook escape hatch is missing, and this repo cannot restore it (#24).**
 `WebhookReceived` is meant to fire for every *verified* payload, before any dispatch decision, so
 an app can react to an event the package never mapped. Ours fires after `parseWebhook()`, so the
-**10 of Revolut's 18 documented events that we do not map** are acknowledged with a 200 and
-vanish — payouts, order authorisations, and `ORDER_PAYMENT_AUTHENTICATION_CHALLENGED`, which is
-the only signal that a payment went to 3DS. Not a hypothetical: they are documented today.
+**14 of Revolut's 22 documented events that we do not map** are acknowledged with a 200 and
+vanish. Not a hypothetical: they are documented today, and they include every `DISPUTE_*` — a
+customer disputing a charge reaches no listener, and `DISPUTE_ACTION_REQUIRED` is the one with a
+deadline attached. (3DS is a lesser case than it first looks: `ORDER_PAYMENT_AUTHENTICATION_CHALLENGED`
+is unmapped too, but an app can still *poll* `GET /orders/{id}` for it — see
+`.claude/rules/revolut-api.md`. What the webhook gap costs there is push, not knowledge.)
 **It is not a reorder.** The references dispatch a raw array, so any event type travels; we
 dispatch a typed `Support\DTO\WebhookPayload` whose `$event` is a non-nullable 8-case enum — for
 an unmapped event the payload cannot be *constructed*, so there is nothing to move. Support moves
