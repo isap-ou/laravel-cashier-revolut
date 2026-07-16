@@ -8,13 +8,10 @@ composer.lock
 *.log
 .DS_Store
 
-# graphify knowledge graph.
-# Committed: graph.json + GRAPH_REPORT.md. The semantic layer in graph.json (INFERRED
-# edges, hyperedges, community names) comes from an LLM — it costs minutes to rebuild and
-# is not reproducible, so a fresh clone must inherit it rather than regenerate it.
-# Everything else is local state: cache/ and the dated backup dirs are artifacts, and
-# manifest.json stores per-file mtimes, which git does not preserve — committing it would
-# churn on every clone.
-/graphify-out/*
-!/graphify-out/graph.json
-!/graphify-out/GRAPH_REPORT.md
+# graphify knowledge graph — local build artifact, entirely untracked.
+# Build it with `graphify update .` (AST only, seconds, no API cost). The semantic layer
+# needs an LLM and is not reproducible without one; see CLAUDE.md for how to get it back.
+# We used to track graph.json so a clone could inherit that layer, but the post-commit
+# hook rebuilds without a key and the rebuild is lossy, so tracking eroded the layer a
+# commit at a time and charged ~27k lines of diff for the privilege.
+/graphify-out/

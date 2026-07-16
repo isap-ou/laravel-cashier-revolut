@@ -12,12 +12,3 @@
 /phpunit.xml        export-ignore
 /phpstan.neon       export-ignore
 /pint.json          export-ignore
-/graphify-out       export-ignore
-
-# graph.json is a large generated JSON: two branches touching it conflict on sight.
-# Union-merge it instead. Requires each clone to register the driver once:
-#   git config merge.graphify.name "graphify graph union merge"
-#   git config merge.graphify.driver "graphify merge-driver %O %A %B"
-# (git will not run a driver that is not configured locally — it falls back to a normal
-# conflict, so an unconfigured clone is degraded, never broken.)
-/graphify-out/graph.json merge=graphify
