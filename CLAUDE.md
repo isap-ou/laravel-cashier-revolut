@@ -128,14 +128,25 @@ CASHIER_CURRENCY_LOCALE=en_IE
 Both reference `WebhookController`s were compared against ours method-by-method. Two open
 issues — **do not work around either locally, and do not assume the webhook layer is done**:
 
-- **#24** (bug) — `WebhookReceived` is dispatched at `RevolutWebhookController.php:78`, i.e.
-  **after** `parseWebhook()` (`:64`). An event type outside the 8 cases of `RevolutWebhookEvent`
-  throws, is caught, and returns a bare 200 (`:65-75`) — so it never reaches a listener.
-  In both references `WebhookReceived` fires *first*, precisely so it is the universal escape
-  hatch for events the package does not map. We also removed the other escape hatch: the
-  references let an app subclass `WebhookController` and add `handleXxx()`, while
-  `RevolutWebhookSynchronizer` is `private` methods behind a closed `match` (`:77-86`).
-  **Net: an app cannot react to any event we did not map.**
+- **#24** (bug, **blocked on support — not fixable in this repo**) — `WebhookReceived` is
+  dispatched at `RevolutWebhookController.php:78`, i.e. **after** `parseWebhook()` (`:64`). An
+  event type outside the 8 cases of `RevolutWebhookEvent` throws, is caught, and returns a bare
+  200 (`:65-75`) — so it never reaches a listener. In both references `WebhookReceived` fires
+  *first*, precisely so it is the universal escape hatch for events the package does not map.
+  We also removed the other escape hatch: the references let an app subclass `WebhookController`
+  and add `handleXxx()`, while `RevolutWebhookSynchronizer` is `private` methods behind a closed
+  `match` (`:77-86`). **Net: an app cannot react to any event we did not map.**
+
+  **Why the reorder cannot just be done here.** The references dispatch a raw `array`, so any
+  event type travels. We dispatch a typed `Support\DTO\WebhookPayload` whose `$event` is a
+  non-nullable `WebhookEvent` — an 8-case closed enum with no case for an unmapped event. So the
+  event cannot be *constructed*, let alone dispatched. Support must move first: `$event` has to
+  go nullable alongside a raw provider event string, or gain an `Unknown` case. Until then the
+  driver-side routes are all worse than the bug (map it onto some other case → a payout is
+  credited as a payment; subclass the DTO and leave `$event` unset → the app's listener throws
+  on read), and `tests/Feature/WebhookControllerTest.php` carries the acceptance test as a
+  documented skip. Once support lands: delete the skip, hoist `event(new WebhookReceived(...))`
+  above `parseWebhook()`, keep it below `verifyWebhook()`.
 - **#25** — no customer-lifecycle webhooks at all. Stripe handles customer updated/deleted and
   payment-method auto-update (`WebhookController.php:240-286`); we handle none, so a customer
   deleted at Revolut leaves a local record claiming an active subscription against a dead id.

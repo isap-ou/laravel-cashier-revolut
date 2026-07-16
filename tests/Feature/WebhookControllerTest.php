@@ -113,16 +113,48 @@ class WebhookControllerTest extends TestCase
         Log::shouldHaveReceived('info')->once();
     }
 
-    public function test_an_unexpected_event_is_acknowledged_but_not_dispatched(): void
+    public function test_an_unmapped_event_still_reaches_a_webhook_received_listener(): void
     {
-        Event::fake([WebhookReceived::class, WebhookHandled::class]);
+        // #24, and it is BLOCKED on the support package — do not "fix" this locally.
+        //
+        // WebhookReceived is meant to be the universal escape hatch: both references
+        // dispatch it before any dispatch decision, so an app can react to an event
+        // the package never mapped. Ours covers only the 8 cases of RevolutWebhookEvent,
+        // so ORDER_REFUND_COMPLETED, a payout, or whatever Revolut ships next year is
+        // acknowledged with a 200 and vanishes — no listener ever sees it.
+        //
+        // The reorder cannot be done here, because the event cannot be CONSTRUCTED.
+        // The references dispatch a raw array; we dispatch a typed
+        // Support\DTO\WebhookPayload whose $event is a non-nullable WebhookEvent, an
+        // 8-case closed enum with no case for an unmapped event. Every driver-side
+        // route out is worse than the bug:
+        //   - map it onto some existing case → a payout gets credited as a customer
+        //     payment. Lying to listeners is not an escape hatch.
+        //   - pass null → TypeError, WebhookPayload::$event is not nullable.
+        //   - subclass WebhookPayload and leave $event unset → constructs, then throws
+        //     "must not be accessed before initialization" inside the app's listener.
+        //   - dispatch a driver-specific event instead → an app listening for the
+        //     contract's WebhookReceived still gets nothing, which is the actual ask.
+        //
+        // Support must let WebhookPayload express an unmapped event first (a nullable
+        // $event plus a raw provider event string, or a WebhookEvent::Unknown case).
+        // Then delete this skip and the fix is a four-line reorder in the controller.
+        $this->markTestSkipped('#24: blocked on support — DTO\WebhookPayload cannot express an unmapped event.');
+    }
+
+    public function test_an_unmapped_event_is_still_acknowledged_with_200(): void
+    {
+        // The half of #24 that already holds and must survive the fix: Revolut retries
+        // a 4XX three times, ten minutes apart, and retrying an event this driver has
+        // no handler for would never succeed. So it is acknowledged, not refused.
+        Event::fake([WebhookHandled::class]);
 
         $response = $this->postSigned('{"event":"PAYOUT_INITIATED","id":"po_1"}');
 
         $response->assertOk();
         $response->assertSee('Webhook ignored.');
 
-        Event::assertNotDispatched(WebhookReceived::class);
+        // Nothing was applied to local state — there is no handler for it.
         Event::assertNotDispatched(WebhookHandled::class);
     }
 
