@@ -9,9 +9,11 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Testing\TestResponse;
 use Isapp\CashierRevolut\Tests\Fixtures\RevolutApi;
 use Isapp\CashierRevolut\Tests\TestCase;
+use Isapp\CashierSupport\DTO\WebhookPayload;
 use Isapp\CashierSupport\Enums\WebhookEvent;
 use Isapp\CashierSupport\Events\WebhookHandled;
 use Isapp\CashierSupport\Events\WebhookReceived;
+use ReflectionClass;
 
 class WebhookControllerTest extends TestCase
 {
@@ -139,6 +141,21 @@ class WebhookControllerTest extends TestCase
         // Support must let WebhookPayload express an unmapped event first (a nullable
         // $event plus a raw provider event string, or a WebhookEvent::Unknown case).
         // Then delete this skip and the fix is a four-line reorder in the controller.
+        //
+        // The blocker is asserted, not just described: a skip that only narrates
+        // itself would sit green forever and outlive the thing it waits for. This
+        // fails the day support's contract moves, which is the day #24 is unblocked.
+        $event = (new ReflectionClass(WebhookPayload::class))->getConstructor()?->getParameters()[0] ?? null;
+
+        $this->assertNotNull($event, 'WebhookPayload has no constructor parameters — the contract moved; recheck #24.');
+        $this->assertSame('event', $event->getName(), 'WebhookPayload::$event is gone — the contract moved; recheck #24.');
+        $this->assertFalse(
+            $event->getType()?->allowsNull(),
+            'support\'s WebhookPayload::$event is nullable now — #24 is UNBLOCKED. Dispatch '
+            .'WebhookReceived above parseWebhook() in RevolutWebhookController, then replace '
+            .'this tripwire with the real assertion: an unmapped event reaches the listener.'
+        );
+
         $this->markTestSkipped('#24: blocked on support — DTO\WebhookPayload cannot express an unmapped event.');
     }
 
