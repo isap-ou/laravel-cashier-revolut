@@ -61,8 +61,30 @@ class RevolutWebhookController
         }
 
         $decoded = json_decode($content, true);
+
+        // A body that is not a JSON object is not an event, and the hatch below must
+        // not fire with an empty array standing in for content: to a listener that
+        // would be indistinguishable from a real unmapped event, which is the same
+        // lie in the other direction. The references never dispatch one either —
+        // Stripe reads $payload['type'] BEFORE its dispatch (WebhookController.php:43,
+        // then :45), so a body it cannot read never reaches a listener.
+        //
+        // Acknowledged rather than refused: retrying an unreadable body would never
+        // succeed. Logged, because a silent drop must be visible somewhere.
+        //
+        // array_is_list() also earns the annotation below rather than asserting it:
+        // json_decode('[1,2]', true) is an array with int keys, and claiming
+        // array<string, mixed> for it would be a lie PHPStan cannot catch.
+        if (! is_array($decoded) || array_is_list($decoded)) {
+            $this->logger->info('A Revolut webhook body could not be read as an event', [
+                'decoded_type' => get_debug_type($decoded),
+            ]);
+
+            return new Response('Webhook ignored.', 200);
+        }
+
         /** @var array<string, mixed> $body */
-        $body = is_array($decoded) ? $decoded : [];
+        $body = $decoded;
 
         // The escape hatch, and it must sit here: above every decision about what
         // this event means, below verifyWebhook(). Revolut documents 22 event types

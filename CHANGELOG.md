@@ -147,6 +147,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wide: an unverified body is not an event, and this is exactly where anyone who could
   reach the URL would fabricate one. A test pins the ordering rather than trusting it.
 
+  **A body we cannot read still reaches no listener**, and that needed saying in code
+  rather than assuming. It is not an unmapped event: dispatching `WebhookReceived([])`
+  for it would hand a listener a content-free event indistinguishable from a real
+  unmapped one — the same lie the reorder exists to end, told the other way round. The
+  references never dispatch one either (Stripe reads `$payload['type']` *before* its
+  dispatch). A body that is not a JSON **object** — unparseable, a scalar, `null`, or a
+  JSON list — is acknowledged with the same 200 and an info log, and fires nothing. The
+  list case also earns the `array<string, mixed>` the event declares, instead of
+  asserting it: `json_decode('[1,2]', true)` has int keys.
+
+  This path had no test before, on either side of the change; it has five now.
+
 - **A caller-level retry no longer charges or refunds twice.** The connector minted a
   fresh `Idempotency-Key` per API call, which protects the transport — `->retry()`
   re-sends the same request, so a transient failure keeps its key — and nothing above

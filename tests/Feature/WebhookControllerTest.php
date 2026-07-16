@@ -11,6 +11,7 @@ use Isapp\CashierRevolut\Tests\Fixtures\RevolutApi;
 use Isapp\CashierRevolut\Tests\TestCase;
 use Isapp\CashierSupport\Events\WebhookHandled;
 use Isapp\CashierSupport\Events\WebhookReceived;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class WebhookControllerTest extends TestCase
 {
@@ -110,6 +111,53 @@ class WebhookControllerTest extends TestCase
         $this->postSigned('{"event":"PAYOUT_INITIATED","id":"po_1"}')->assertOk();
 
         Log::shouldHaveReceived('info')->once();
+    }
+
+    /**
+     * A body we cannot read is NOT an unmapped event, and must not be dispatched as one.
+     *
+     * This is the case the old controller comment named and no test ever pinned. It
+     * matters more now that the hatch fires before the parse: dispatching
+     * WebhookReceived([]) here would hand every listener a content-free event that is
+     * indistinguishable from a real unmapped one — the same lie the reorder exists to
+     * end, told in the other direction. The references never dispatch one either:
+     * Stripe reads $payload['type'] BEFORE its dispatch.
+     *
+     * @param  string  $body  A verified body that is not a JSON object.
+     */
+    #[DataProvider('unreadableBodies')]
+    public function test_a_body_we_cannot_read_is_acknowledged_but_reaches_no_listener(string $body): void
+    {
+        Event::fake([WebhookReceived::class, WebhookHandled::class]);
+        Log::spy();
+
+        $response = $this->postSigned($body);
+
+        // Acknowledged, not refused: retrying it would never succeed.
+        $response->assertOk();
+        $response->assertSee('Webhook ignored.');
+
+        Event::assertNotDispatched(WebhookReceived::class);
+        Event::assertNotDispatched(WebhookHandled::class);
+
+        // But never in silence.
+        Log::shouldHaveReceived('info')->once();
+    }
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function unreadableBodies(): array
+    {
+        return [
+            'not json at all' => ['not json'],
+            'a json scalar' => ['"5"'],
+            'json null' => ['null'],
+            'an empty body' => [''],
+            // A JSON list decodes to an array with int keys — is_array() alone would
+            // wave it through and the event's array<string, mixed> would be a lie.
+            'a json list' => ['[1,2,3]'],
+        ];
     }
 
     /**
