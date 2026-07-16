@@ -52,4 +52,17 @@ create, and usage records. `POST /orders` and `POST /orders/{id}/payments` accep
   of `cancel` and `change_plan_variation`. `change-plan` is `at_cycle_end` and nothing else.
 - Cancelling an already `cancelled`/`finished` subscription is refused.
 - Webhooks: acknowledged by any 200-399; a 4XX is retried 3 more times, 10 minutes apart.
-  There is no refund event, no renewal event and no plan-change event in the catalogue.
+  The catalogue is **18 event types**, verified against the `events` enum of `create-webhook`
+  / `update-webhook` (identical in both). There is no refund event, no renewal event and no
+  plan-change event — but do not read that as "the catalogue is small":
+
+  | Group | Events |
+  |---|---|
+  | Order | `ORDER_COMPLETED`, `ORDER_AUTHORISED`, `ORDER_CANCELLED`, `ORDER_FAILED`, `ORDER_INCREMENTAL_AUTHORISATION_AUTHORISED`, `ORDER_INCREMENTAL_AUTHORISATION_DECLINED`, `ORDER_INCREMENTAL_AUTHORISATION_FAILED` |
+  | Payment | `ORDER_PAYMENT_AUTHENTICATION_CHALLENGED`, `ORDER_PAYMENT_AUTHENTICATED`, `ORDER_PAYMENT_DECLINED`, `ORDER_PAYMENT_FAILED` |
+  | Subscription | `SUBSCRIPTION_INITIATED`, `SUBSCRIPTION_FINISHED`, `SUBSCRIPTION_CANCELLED`, `SUBSCRIPTION_OVERDUE` |
+  | Payout | `PAYOUT_INITIATED`, `PAYOUT_COMPLETED`, `PAYOUT_FAILED` |
+
+  `RevolutWebhookEvent` maps **8 of those 18**. Every case it maps is real; the other 10 are
+  received and dropped with a 200 (that is the driver half of #24). Nothing here is a
+  hypothetical future event — they are documented today.

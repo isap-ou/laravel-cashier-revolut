@@ -121,13 +121,23 @@ class WebhookControllerTest extends TestCase
         //
         // WebhookReceived is meant to be the universal escape hatch: both references
         // dispatch it before any dispatch decision, so an app can react to an event
-        // the package never mapped. Ours covers only the 8 cases of RevolutWebhookEvent,
-        // so anything outside them is acknowledged with a 200 and vanishes — no listener
-        // ever sees it. The realistic instance is an event Revolut adds after this was
-        // written; the string below is a stand-in for "unmapped", not a real event.
-        // (.claude/rules/revolut-api.md:55 is what the catalogue is known NOT to contain;
-        // it does not enumerate it, so do not invent an example — an earlier draft of this
-        // comment cited ORDER_REFUND_COMPLETED, which Revolut does not emit.)
+        // the package never mapped. Ours covers 8 of the 18 event types the Merchant API
+        // documents, so the other 10 are acknowledged with a 200 and vanish — no listener
+        // ever sees them. This is today, not a hypothetical: PAYOUT_INITIATED below is a
+        // real documented event, and so are ORDER_AUTHORISED, ORDER_CANCELLED, the three
+        // ORDER_INCREMENTAL_AUTHORISATION_* and ORDER_PAYMENT_AUTHENTICATED. The costliest
+        // is ORDER_PAYMENT_AUTHENTICATION_CHALLENGED — an app cannot learn a payment went
+        // to 3DS by any route (see support#35, which is the DTO half of the same hole).
+        //
+        // Catalogue verified against the docs, not remembered — the `events` enum of
+        // create-webhook/update-webhook (see .claude/rules/sources-of-truth.md for how to
+        // fetch them). There is no refund, renewal or plan-change event; an earlier draft
+        // of this comment invented ORDER_REFUND_COMPLETED, and a later one claimed
+        // PAYOUT_INITIATED was not real. Check the enum before naming an event here.
+        //
+        // Mapping the other 10 is a separate question from this issue: it needs deciding
+        // which of them a provider-agnostic contract should even carry (a payout is not a
+        // Cashier concept). #24 is about the ones we will never map, whatever we decide.
         //
         // The reorder cannot be done here, because the event cannot be CONSTRUCTED.
         // The references dispatch a raw array; we dispatch a typed
