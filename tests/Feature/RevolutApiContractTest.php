@@ -6,7 +6,6 @@ namespace Isapp\CashierRevolut\Tests\Feature;
 
 use Illuminate\Support\Facades\Http;
 use Isapp\CashierRevolut\Enums\RevolutPaymentMethodType;
-use Isapp\CashierRevolut\Enums\RevolutWebhookEvent;
 use Isapp\CashierRevolut\Exceptions\RevolutApiException;
 use Isapp\CashierRevolut\Http\Responses\OrderResponse;
 use Isapp\CashierRevolut\Http\Responses\SubscriptionResponse;
@@ -365,6 +364,10 @@ class RevolutApiContractTest extends TestCase
      * That enum is gone (support#47) — it was a closed eight-case vocabulary that no
      * gateway's catalogue is a subset of, and it made an event we do not map impossible to
      * express. What is left is the part that was ever a fact about Revolut: the body's shape.
+     *
+     * It also asserted the event had a case in RevolutWebhookEvent. That enum is now the full
+     * 22-type catalogue, so the assertion holds for every documented event by construction and
+     * proved nothing here — RevolutWebhookEventTest owns the catalogue's completeness.
      */
     #[DataProvider('webhookEventProvider')]
     public function test_a_documented_webhook_event_names_its_resource_where_we_read_it(
@@ -372,12 +375,6 @@ class RevolutApiContractTest extends TestCase
         string $resourceId,
     ): void {
         $body = RevolutApi::webhookEvent($event);
-
-        $this->assertNotNull(
-            RevolutWebhookEvent::tryFrom($event),
-            "[{$event}] is documented and this driver does not map it — deliberate for 14 of the 22, "
-            .'but this provider lists the ones it should map.',
-        );
 
         // Revolut names it per event group, which is why the synchronizer reads a list of
         // keys rather than one. If a group ever renamed it, the sync would silently do

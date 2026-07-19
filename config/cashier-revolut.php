@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Isapp\CashierRevolut\Enums\RevolutWebhookEvent;
+
 return [
     /*
     |--------------------------------------------------------------------------
@@ -50,11 +52,23 @@ return [
     | here. Register it with `php artisan cashier:webhook revolut`, which reads
     | the URL from that route.
     |
+    | events is what that command subscribes the endpoint to — Revolut's whole
+    | documented catalogue by default, which is deliberate. The driver applies
+    | 8 of them to local state; the rest are delivered so they reach listeners
+    | of Isapp\CashierSupport\Events\WebhookReceived, which carries the raw
+    | body. That is the only route an app has to a dispute or a payout.
+    |
+    | Narrowing this list narrows what Revolut SENDS. An event removed here
+    | stops reaching WebhookReceived too — it is not filtered on our side, it
+    | never arrives. Removing anything the synchronizer applies (the ORDER_* and
+    | SUBSCRIPTION_* cases it matches on) also stops local state being synced.
+    |
     */
     'webhook' => [
         'signing_secret' => env('REVOLUT_WEBHOOK_SECRET'),
         'tolerance' => max(0, (int) env('REVOLUT_WEBHOOK_TOLERANCE', 300)),
         'sync_timeout' => max(1, (int) env('REVOLUT_WEBHOOK_SYNC_TIMEOUT', 5)),
+        'events' => RevolutWebhookEvent::values()->all(),
     ],
 
     /*

@@ -36,8 +36,11 @@ When Revolut API does not natively support a feature:
 - `payment_methods.get` — GET /api/customers/{id}/payment-methods/{id}
 - `payment_methods.delete` — DELETE /api/customers/{id}/payment-methods/{id} (204)
 - `checkout.amount` — Revolut Checkout Widget (an order amount; Revolut has no checkout price catalogue, so `checkout.prices` is NOT declared)
-- `webhooks` — we map 8 of the 22 documented event types (Order/Payment/Subscription/Payout/
-  Dispute); see `revolut-api.md` for the verified enum and which 14 we drop
+- `webhooks` — we SUBSCRIBE to all 22 documented event types (Order/Payment/Subscription/Payout/
+  Dispute) and APPLY 8 of them. The other 14 are delivered so they reach
+  `Events\WebhookReceived` listeners with the raw body; `pipeline()` returns false for them and
+  never throws. Narrow the subscribed set with `config('cashier-revolut.webhook.events')`. See
+  `revolut-api.md` — the two sets are not the same set, and conflating them cost us the hatch
 
 ## Invoices — DEFERRED (see the note above)
 

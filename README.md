@@ -78,7 +78,7 @@ table cannot drift from what `Cashier::supports(...)` returns.
 | `PaymentMethodsList` | ✅ | `GET /customers/{id}/payment-methods` |
 | `PaymentMethodsDelete` | ✅ | `DELETE /customers/{id}/payment-methods/{id}` |
 | `CheckoutAmount` | ✅ | Checkout Widget / hosted page (an amount) |
-| `Webhooks` | ✅ | verified + handled — 8 of Revolut's 22 events mapped (see [Webhooks](#webhooks)) |
+| `Webhooks` | ✅ | verified + handled — subscribed to all 22 of Revolut's events, 8 applied to local state, the rest delivered to `WebhookReceived` (see [Webhooks](#webhooks)) |
 | `Invoices` | ⏸️ | Revolut has no invoice API; local rendering is **deferred** — engine + layout are an open question |
 | `SubscriptionCancelNow` | ❌ | cancel stops future billing but keeps the paid cycle; no distinct immediate terminate |
 | `SubscriptionPauseImmediate` | ❌ | no pause endpoint (`paused` is a state with no trigger) |
@@ -291,6 +291,40 @@ No URL argument: the command reads it from the route cashier-support mounts —
 drift from the route it was supposed to reach, which 404s on every delivery in silence.
 Use `--url=` only for a proxy or tunnel that genuinely differs.
 
+> **Registering does not update an existing endpoint.** This command only ever calls
+> `POST /api/webhooks`, which Revolut documents as *create* — updating one is a separate
+> `PATCH /api/webhooks/{id}`, and a merchant may register at most 10 URLs. Each endpoint gets
+> its **own** signing secret, while `REVOLUT_WEBHOOK_SECRET` holds exactly one. So if you
+> register the same URL twice you may end up with two live endpoints: every event delivered
+> twice, and the one whose secret is not configured failing verification every time.
+> **Delete the existing webhook in the Revolut dashboard first**, then register, then store
+> the new secret.
+
+It subscribes to **all 22** of Revolut's documented event types — the driver applies 8 of
+them and the rest exist so they reach your `WebhookReceived` listener. Narrow that with
+`--events=...`, or permanently in config:
+
+```php
+// config/cashier-revolut.php — the WHOLE webhook block, not just 'events'
+'webhook' => [
+    'signing_secret' => env('REVOLUT_WEBHOOK_SECRET'),
+    'tolerance' => max(0, (int) env('REVOLUT_WEBHOOK_TOLERANCE', 300)),
+    'sync_timeout' => max(1, (int) env('REVOLUT_WEBHOOK_SYNC_TIMEOUT', 5)),
+    'events' => ['ORDER_COMPLETED', 'SUBSCRIPTION_CANCELLED'],
+],
+```
+
+The full block is shown on purpose: the package merges its config with `mergeConfigFrom`,
+which is a **shallow** merge, so a published `webhook` array replaces ours entirely. Writing
+only `events` there drops `signing_secret` — and a missing signing secret is a hard failure,
+so every webhook would be rejected.
+
+Narrowing changes what Revolut **sends**. An event removed here does not arrive at all, so
+it reaches no `WebhookReceived` listener either — and removing one the driver applies stops
+local state being synced for it. Narrowing is also the knob to reach for on webhook volume:
+support's route carries a `throttle` middleware (`cashier-support.webhook.middleware`), and
+a throttled delivery is a 4XX that Revolut retries a limited number of times before dropping.
+
 Incoming webhooks arrive at **cashier-support's** route and controller — this driver
 ships neither. It supplies the delivery behind one contract method: verification
 (HMAC-SHA256 over `v1.{timestamp}.{body}`) and what applying an event does. Support
@@ -306,10 +340,11 @@ and a real DTO, and they are what the driver dispatches once a webhook has been
 applied.
 
 `WebhookReceived` is the escape hatch, and it fires for **every** verified event —
-including the 14 of Revolut's 22 documented types this driver does not map (every
+including the 14 of Revolut's 22 documented types this driver does not apply (every
 `DISPUTE_*`, the `PAYOUT_*`, `ORDER_AUTHORISED`, the 3DS challenge, …). Nothing is
 applied to local state for those and `WebhookHandled` does **not** fire, but your
-listener sees them:
+listener sees them — which is why the default subscription is the whole catalogue and
+not just what we apply:
 
 ```php
 Event::listen(function (WebhookReceived $event) {

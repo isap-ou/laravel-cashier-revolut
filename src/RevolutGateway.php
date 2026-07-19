@@ -66,16 +66,31 @@ class RevolutGateway extends BaseGateway implements RegistersWebhooks
      */
     public function registerWebhook(string $url, array $events): WebhookRegistration
     {
-        $events = $events === [] ? array_column(RevolutWebhookEvent::cases(), 'value') : $events;
+        $events = $events === [] ? $this->configuredEvents() : $events;
 
         foreach ($events as $event) {
-            if (RevolutWebhookEvent::tryFrom($event) === null) {
+            // Not assumed to be a string. The signature says array<int, string> and PHPStan
+            // believes it, but this is a public entry point reached from an artisan option
+            // and from app code — under strict_types a non-string here would be a TypeError
+            // out of tryFrom(), and the contract promises CashierException.
+            if (! is_string($event) || RevolutWebhookEvent::tryFrom($event) === null) {
+                $name = match (true) {
+                    is_string($event) => $event,
+                    is_scalar($event) => var_export($event, true),
+                    default => get_debug_type($event),
+                };
+
                 // Refused before the call: Revolut would accept an unknown name and
                 // subscribe the endpoint to nothing, which succeeds and is discovered
                 // much later, by the webhooks that never arrive.
+                //
+                // Measured against the whole catalogue, not against the 8 the synchronizer
+                // applies. Subscribing to an event we do not apply is the POINT — it is how
+                // a dispute reaches Events\WebhookReceived — so refusing DISPUTE_ACTION_REQUIRED
+                // here would close the hatch from the one place that can open it.
                 throw new CashierException(
-                    "Unknown webhook event [{$event}]. Known events: "
-                    .implode(', ', array_column(RevolutWebhookEvent::cases(), 'value'))
+                    "Unknown webhook event [{$name}]. Known events: "
+                    .RevolutWebhookEvent::values()->implode(', ')
                 );
             }
         }
@@ -105,6 +120,37 @@ class RevolutGateway extends BaseGateway implements RegistersWebhooks
         }
 
         return new WebhookRegistration(id: $id, secret: $secret);
+    }
+
+    /**
+     * The events an empty $events means, per config — the whole catalogue unless narrowed.
+     *
+     * The default lives in config rather than being read off the enum here, so that what an
+     * operator subscribes to is an operator's decision they can see and edit, not a constant
+     * they would have to override the gateway to change.
+     *
+     * A missing or unusable config falls back to the catalogue, in BOTH senses: an endpoint
+     * subscribed to nothing is the silent failure this whole change exists to remove, so a bad
+     * config must not be able to produce one. That fallback is also load-bearing for upgrades —
+     * mergeConfigFrom is a shallow array_merge, so an app that published this config before
+     * `events` existed has a webhook block with no such key, and it replaces ours wholesale.
+     * Do not remove it: every upgrading app relies on it.
+     *
+     * Anything left that is not a string is passed through as-is for the validation loop to
+     * refuse with a CashierException — coercing it here (strval) would fatal on a nested array,
+     * which is the likeliest way to get this key wrong.
+     *
+     * @return array<int, mixed>
+     */
+    private function configuredEvents(): array
+    {
+        $configured = config('cashier-revolut.webhook.events');
+
+        if (! is_array($configured) || $configured === []) {
+            return RevolutWebhookEvent::values()->all();
+        }
+
+        return array_values($configured);
     }
 
     /**

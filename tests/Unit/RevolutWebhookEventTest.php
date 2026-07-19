@@ -16,6 +16,15 @@ use PHPUnit\Framework\TestCase;
  * What is worth testing is the thing nothing tested before: that these strings are real.
  * A typo in a case value fails no type check, subscribes the webhook to nothing at
  * Revolut, and is discovered by the events that never arrive.
+ *
+ * Since the enum became Revolut's CATALOGUE rather than our coverage, that is the whole
+ * of its contract, and it is tested in both directions here. Which of the 22 the driver
+ * applies is not this file's business — it is the match in RevolutWebhookSynchronizer.
+ *
+ * That an unapplied event still reaches a listener is proved by WebhookDeliveryTest; that it
+ * ARRIVES to be able to — the actual fix — is proved by WebhookRegistrationTest, because a
+ * delivery test cannot distinguish an event we chose not to apply from one we never had a
+ * case for. Both take a `return false` and look identical from outside.
  */
 class RevolutWebhookEventTest extends TestCase
 {
@@ -64,20 +73,28 @@ class RevolutWebhookEventTest extends TestCase
         }
     }
 
-    public function test_it_maps_eight_of_the_twenty_two_and_the_gap_is_deliberate(): void
+    public function test_every_event_revolut_sends_has_a_case(): void
     {
-        // Not a target to grow towards: whether to map a payout or a dispute needs "does
-        // this belong in a provider-agnostic contract at all" answered first. The 14 are
-        // not lost meanwhile — support dispatches WebhookReceived with the raw body for
-        // every verified delivery, which is #24's fix and the reason this gap is tolerable.
-        $this->assertCount(8, RevolutWebhookEvent::cases());
+        // The other direction, and the one that carries the fix. While this enum held only
+        // the 8 the synchronizer applies, registration read its cases and so subscribed the
+        // endpoint to 8 of 22 — the other 14 were never DELIVERED, and WebhookReceived could
+        // not fire for the very events it exists for. A missing case is that bug returning.
+        $missing = array_diff(self::DOCUMENTED, RevolutWebhookEvent::values()->all());
 
-        $unmapped = array_diff(self::DOCUMENTED, array_column(RevolutWebhookEvent::cases(), 'value'));
+        $this->assertSame(
+            [],
+            $missing,
+            'Documented Revolut events with no case: '.implode(', ', $missing).'. Registration '
+            .'subscribes to this catalogue, so anything absent here is never delivered at all — '
+            .'not to the synchronizer, and not to a WebhookReceived listener.',
+        );
+    }
 
-        $this->assertCount(14, $unmapped);
-        // Every DISPUTE_* is among them, and DISPUTE_ACTION_REQUIRED is the one with a
-        // deadline attached — the concrete cost of the gap, and why it is documented
-        // rather than shrugged at.
-        $this->assertContains('DISPUTE_ACTION_REQUIRED', $unmapped);
+    public function test_the_enum_is_exactly_the_catalogue(): void
+    {
+        $this->assertCount(22, RevolutWebhookEvent::cases());
+        // Every DISPUTE_* is present, and DISPUTE_ACTION_REQUIRED is the one with a deadline
+        // attached — the event whose absence had a concrete cost.
+        $this->assertContains('DISPUTE_ACTION_REQUIRED', RevolutWebhookEvent::values()->all());
     }
 }

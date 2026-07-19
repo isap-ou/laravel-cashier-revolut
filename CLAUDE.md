@@ -27,7 +27,8 @@ Merchant API capabilities:
 - **Subscriptions** — create, list, get, update, cancel, change plan (no native pause/resume endpoints)
 - **Billing Cycles** — first-class concept with dedicated endpoints per subscription
 - **Webhooks** — **22 documented event types** across Order / Payment / Subscription / Payout /
-  Dispute. We map 8; the verified enum and the 14 we drop are in `.claude/rules/revolut-api.md`
+  Dispute. We **subscribe to all 22** and **apply 8**; the other 14 are delivered so they reach
+  `WebhookReceived`. Two sets, not one — see `.claude/rules/revolut-api.md`
 - **Checkout Widget** — JS widget for accepting payments (analogous to Stripe Elements)
 
 Authorization: API keys from the Revolut Business dashboard.
@@ -142,12 +143,21 @@ silently, and this file has no test over it. Two shapes matter here:
 
 **The webhook escape hatch is open (#24), and the shape of how it got there is the lesson.**
 `WebhookReceived` fires for every *verified* body, above every decision about what the event
-means — so the **14 of Revolut's 22 documented events we do not map** reach a listener carrying
+means — so the **14 of Revolut's 22 documented events we do not apply** reach a listener carrying
 the raw body, instead of vanishing behind a 200. They include every `DISPUTE_*`;
 `DISPUTE_ACTION_REQUIRED` is the one with a deadline attached. (3DS was always a lesser case than
-it looks: `ORDER_PAYMENT_AUTHENTICATION_CHALLENGED` is unmapped too, but an app can *poll*
-`GET /orders/{id}` for it — see `.claude/rules/revolut-api.md`. What the gap cost there was push,
-not knowledge.)
+it looks: `ORDER_PAYMENT_AUTHENTICATION_CHALLENGED` is unapplied too, but `charge()` returns a
+`RequiresAction` payment synchronously and an app can also *poll* `GET /orders/{id}` — see
+`.claude/rules/revolut-api.md`. What the gap cost there was push, not knowledge.)
+
+**And "reach a listener" was aspirational until 2026-07-20 — dispatch order is only half of it.**
+An event has to be *delivered* before ordering can matter, and `Enums\RevolutWebhookEvent` held
+only the 8 we apply while `registerWebhook()` read its cases for the subscription list. So
+`php artisan cashier:webhook revolut` subscribed the endpoint to 8 of 22 and the other 14 were
+never sent at all: the hatch was correctly sequenced above a body that never arrived. The enum is
+now the full catalogue, the subscribed set is `config('cashier-revolut.webhook.events')` and
+defaults to all of it, and what we *apply* is the `match` in `RevolutWebhookSynchronizer` and
+nowhere else. **Those are two sets, not one** — re-merging them is the bug, in either direction.
 
 **It was a four-line reorder that this repo still could not do**, and that is the part worth
 keeping. `WebhookReceived` carried a typed `Support\DTO\WebhookPayload` whose `$event` was a
