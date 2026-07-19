@@ -23,6 +23,7 @@ use Isapp\CashierSupport\Events\SubscriptionCanceled;
 use Isapp\CashierSupport\Events\SubscriptionPastDue;
 use Isapp\CashierSupport\Events\SubscriptionRenewed;
 use Isapp\CashierSupport\Events\SubscriptionUpdated;
+use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
 use Isapp\CashierSupport\Facades\Cashier;
 
 class WebhookSyncTest extends TestCase
@@ -521,14 +522,11 @@ class WebhookSyncTest extends TestCase
                 && $event->payment->amount === 500;
         });
 
-        // The gateway's local InvoiceOperations now serve the record.
-        $invoices = Cashier::provider()->invoices($user);
-        $this->assertCount(1, $invoices);
-        $this->assertSame(RevolutApi::ORDER_ID, $invoices[0]->id);
-        $this->assertSame(500, $invoices[0]->amount);
-
-        $found = Cashier::provider()->findInvoice($user, RevolutApi::ORDER_ID);
-        $this->assertNotNull($found);
+        // Invoices is now a deferred (unsupported) capability, so gateway-surface
+        // invoice access refuses — the webhook synchronizer still persists the
+        // local record above, which is what this test asserts.
+        $this->expectException(UnsupportedOperationException::class);
+        Cashier::provider()->invoices($user);
     }
 
     public function test_sync_is_idempotent_for_duplicate_deliveries(): void

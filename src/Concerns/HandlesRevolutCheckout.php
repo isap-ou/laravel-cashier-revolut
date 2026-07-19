@@ -88,7 +88,9 @@ trait HandlesRevolutCheckout
         return new CreateOrderRequest(
             // Amount is guaranteed non-null and positive by capability().
             amount: (int) $request->amount,
-            currency: $currency->value,
+            // CheckoutRequest::$currency is a Money\Currency now (support #32); Revolut wants the
+            // bare ISO-4217 code.
+            currency: $currency->getCode(),
             customer: $customerId !== null ? new OrderCustomerRequest($customerId) : null,
             redirectUrl: $request->successUrl,
             description: $request->description,

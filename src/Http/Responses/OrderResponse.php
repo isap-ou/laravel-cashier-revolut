@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace Isapp\CashierRevolut\Http\Responses;
 
 use Carbon\CarbonImmutable;
+use InvalidArgumentException;
 use Isapp\CashierRevolut\Enums\RevolutOrderState;
 use Isapp\CashierRevolut\Enums\RevolutOrderType;
 use Isapp\CashierRevolut\Exceptions\RevolutApiException;
+use Isapp\CashierSupport\Casts\CurrencyCast;
 use Isapp\CashierSupport\DTO\Payment;
-use Isapp\CashierSupport\Enums\Currency;
 use Isapp\CashierSupport\Enums\PaymentStatus;
+use Money\Currency;
 use Spatie\LaravelData\Attributes\MapInputName;
 use Spatie\LaravelData\Attributes\WithCast;
 use Spatie\LaravelData\Casts\DateTimeInterfaceCast;
@@ -66,14 +68,22 @@ class OrderResponse extends Data
     }
 
     /**
-     * The order currency as the support enum.
+     * The order currency as a Money\Currency value object.
      *
-     * @throws RevolutApiException When the currency is not supported.
+     * A currency Revolut sent that is not a known ISO-4217 code is a fact about the
+     * world (bad gateway data), not a programmer error — so it surfaces as a catchable
+     * RevolutApiException, not the InvalidArgumentException CurrencyCast raises at the
+     * support boundary.
+     *
+     * @throws RevolutApiException When the currency is not a known ISO-4217 code.
      */
     public function currencyEnum(): Currency
     {
-        return Currency::tryFrom(strtoupper($this->currency))
-            ?? throw RevolutApiException::unsupportedCurrency($this->currency);
+        try {
+            return CurrencyCast::fromCode($this->currency);
+        } catch (InvalidArgumentException) {
+            throw RevolutApiException::unsupportedCurrency($this->currency);
+        }
     }
 
     public function status(): PaymentStatus

@@ -11,6 +11,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > its pre-release history has been collapsed into this one entry rather than
 > carried as a version trail that describes tags nobody ever installed.
 
+### Webhooks: subscribe to the whole catalogue, apply eight
+
+- **`Enums\RevolutWebhookEvent` is now Revolut's full 22-event catalogue**, not the 8 the driver
+  applies. It had done two jobs at once — it was the subscription list *and* the dispatch map — and
+  because registration read its cases, `php artisan cashier:webhook revolut` subscribed the endpoint
+  to 8 of 22. The other 14 were therefore never **delivered**, which made `WebhookReceived` — the
+  escape hatch #24 and support#42/#47 exist to guarantee — unreachable for exactly the events it
+  was built for. Every `DISPUTE_*` was in that set.
+- **New `cashier-revolut.webhook.events` config key**, defaulting to every case of the enum. This is
+  what `registerWebhook()` subscribes to when the caller passes no explicit list. Narrowing it
+  narrows what Revolut *sends*.
+- **What the driver applies is now readable in one place** — the `match` in
+  `Webhooks\RevolutWebhookSynchronizer::handle()`, which gained `default => false` for the 14 it
+  does not sync. `pipeline()` returns false for them and `WebhookHandled` does not fire, unchanged;
+  what changed is that they arrive at all.
+- **`registerWebhook()` validates against the 22, not the 8.** Subscribing to
+  `DISPUTE_ACTION_REQUIRED` used to be refused outright; it is now the supported way to hear about
+  a dispute. An unknown name still throws before the call, naming the valid ones.
+- **First test coverage for `registerWebhook()`** (`tests/Feature/WebhookRegistrationTest.php`) —
+  the method had none, which is why this went unnoticed.
+
+**Upgrading.** An endpoint already registered with the old 8 events keeps receiving only those 8 —
+the subscription lives at Revolut, not in this package, so upgrading changes nothing on its own.
+
+To widen it: **delete the existing webhook in the Revolut dashboard first**, then run
+`php artisan cashier:webhook revolut`, then store the new signing secret in
+`REVOLUT_WEBHOOK_SECRET`. Do not simply re-run the command. `POST /api/webhooks` is documented as
+*create* — Revolut publishes a separate `PATCH /api/webhooks/{id}` for updating one, and caps a
+merchant at 10 registered URLs — and this driver only ever calls the create. The docs do not say
+what posting an already-registered URL does, which is the reason to delete first rather than find
+out: if it registers a second endpoint you get two live ones, each with its **own** signing
+secret, so every event arrives twice and the endpoint whose secret is not in your config fails
+verification on every delivery.
+
+Then expect more deliveries: all of them reach `WebhookReceived`, none change local state, none
+fire `WebhookHandled`. If that volume is a problem, narrow
+`config('cashier-revolut.webhook.events')` before registering — note that support's webhook route
+is throttled, and a throttled delivery is a 4XX Revolut retries a limited number of times before
+dropping. If you run `config:cache`, re-run it after upgrading: a cached list is a frozen one and
+will not pick up events added to the catalogue in a later release.
+
+### Reworked onto the current cashier-support
+
+- **`RevolutGateway` now extends `Gateway\BaseGateway`.** `capabilities()` and `supports()` are no
+  longer hand-written — they are derived from the methods the driver actually overrides, and the
+  operations Revolut cannot do (cancel-now, pause, resume, add-payment-method, quantity-update) are
+  inherited `Refuses*` refusals instead of throwing stubs. Only the three intents no method can
+  express are declared: `SubscriptionSwapAtPeriodEnd`, `SubscriptionTrials`, `CheckoutAmount`.
+  Closes the driver's #32. A stub must never be re-added for an inherited refusal: under BaseGateway
+  an overridden method reads as *supported*, so a stub would falsely claim the capability.
+- **`updateCustomer()` is now supported** (`Capability::CustomersUpdate`), via
+  `PATCH /api/customers/{id}` — only the named fields are sent, so an unmentioned one is left
+  untouched at the gateway. `createCustomer()` now takes a typed `DTO\CustomerDetails`
+  (support#52) instead of an untyped options array.
+- **Currency is a `Money\Currency`, not an enum** (support#32). `OrderResponse`/`RefundResponse`
+  build it through support's `Casts\CurrencyCast`, keeping a bad code a catchable
+  `RevolutApiException` rather than the cast's `InvalidArgumentException`; the driver adds a direct
+  `moneyphp/money` dependency. `CheckoutRequest::forAmount(1500, new Currency('EUR'))`.
+- **`swapSubscription()` gains a `Proration` parameter** (support#53) to match the current
+  contract. Pause, resume and cancel-now are no longer defined in the driver at all — they inherit
+  `BaseGateway`'s refusals, which already carry the current signatures for free (pause's
+  `?DateTimeInterface $until`, support#72). Revolut swaps only at cycle end and never prorates, so
+  the driver accepts the proration intent but does not act on it, and does not declare
+  `SubscriptionNoProration` — the support guard therefore refuses a `NoProrate` swap. How the
+  abstraction should model a gateway that can never prorate is an open support question.
+- **Invoices are deferred.** support#33 moved invoice *rendering* to the driver
+  (`Contracts\InvoiceRenderer`/`RendersInvoices`); its engine, layout and contents are an open
+  design question, so the driver ships no renderer and `Invoices` reports unsupported. The webhook
+  synchronizer still writes the local invoice rows, so no data is lost.
+- **A charge routed to 3DS/SCA now surfaces, instead of stalling silently** (support#35). When
+  `POST /orders/{id}/payments` comes back `authentication_challenge`, `charge()` returns a
+  `Payment` with `RequiresAction` status carrying the order token as its `clientSecret` — as data,
+  not a throw. support's `Concerns\PerformsCharges` turns that into a catchable
+  `IncompletePaymentException` the frontend can resume from. Payment state is mapped through the
+  new `Http\Responses\PaymentResponse`.
+- **A bad caller-supplied currency is caught before the request, not after.**
+  `currencyFromOptions()` now validates the code against ISO-4217 via support's `CurrencyCast` (the
+  same validation the response side uses), so `charge` and `refund` raise `InvalidArgumentException`
+  for a malformed code rather than sending it and surfacing Revolut's opaque 4xx. (`checkout()`
+  already took a typed `Money\Currency` and is unaffected.) **Upgrade note:** a misconfigured
+  `CASHIER_CURRENCY` (a non-ISO-4217 value) now fails fast on every charge/refund that omits an
+  explicit currency, rather than a per-call gateway 4xx — set it to a valid ISO code (a lowercase
+  code such as `eur` is fine, it is upper-cased).
+
 ### Added
 
 - **A scheduled plan change is now visible to the app.** Revolut reports it back on

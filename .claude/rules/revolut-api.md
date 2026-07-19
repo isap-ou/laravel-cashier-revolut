@@ -68,10 +68,19 @@ create, and usage records. `POST /orders` and `POST /orders/{id}/payments` accep
   | Payout | `PAYOUT_INITIATED`, `PAYOUT_COMPLETED`, `PAYOUT_FAILED` |
   | Dispute | `DISPUTE_ACTION_REQUIRED`, `DISPUTE_UNDER_REVIEW`, `DISPUTE_WON`, `DISPUTE_LOST` |
 
-  `RevolutWebhookEvent` maps **8 of those 22**. Every case it maps is real; the other 14 are
-  received and dropped with a 200 (that is the driver half of #24). Nothing here is a
-  hypothetical future event — they are documented today, and the dropped set includes every
-  `DISPUTE_*`, i.e. a customer disputing a charge is invisible to the app.
+  `RevolutWebhookEvent` is that catalogue — **all 22**. Two different sets follow from it and
+  must not be confused again:
+
+  - **Subscribed**: `config('cashier-revolut.webhook.events')`, defaulting to all 22. This is
+    what `registerWebhook()` sends to `POST /webhooks`. An event absent here is never
+    *delivered*, so it reaches nothing — not the synchronizer, not a `WebhookReceived` listener.
+  - **Applied**: the `match` in `RevolutWebhookSynchronizer::handle()`, **8 of the 22**. The rest
+    take `default`, `pipeline()` returns false, and `WebhookHandled` does not fire.
+
+  The enum held only the applied 8 until 2026-07-20, and registration read its cases — so we
+  subscribed to 8 of 22 and the other 14 never arrived, which made #24's escape hatch
+  unreachable for exactly the events it was built for (every `DISPUTE_*` among them). The enum
+  is a fact about Revolut; our coverage lives in the synchronizer. Do not merge them back.
 
 - A payment going to 3DS is **not** only visible via `ORDER_PAYMENT_AUTHENTICATION_CHALLENGED`.
   An app can also pull it: `GET /orders/{id}` returns `payments[].state` =

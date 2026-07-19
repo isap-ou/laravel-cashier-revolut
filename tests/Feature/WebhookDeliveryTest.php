@@ -7,6 +7,7 @@ namespace Isapp\CashierRevolut\Tests\Feature;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Testing\TestResponse;
+use Isapp\CashierRevolut\Enums\RevolutWebhookEvent;
 use Isapp\CashierRevolut\Tests\Fixtures\RevolutApi;
 use Isapp\CashierRevolut\Tests\TestCase;
 use Isapp\CashierSupport\Events\WebhookHandled;
@@ -43,6 +44,53 @@ class WebhookDeliveryTest extends TestCase
                 && $event->payload['order_id'] === RevolutApi::ORDER_ID;
         });
         Event::assertDispatched(WebhookHandled::class);
+    }
+
+    public function test_an_event_we_do_not_apply_reaches_a_listener_without_claiming_it_was_handled(): void
+    {
+        Event::fake([WebhookReceived::class, WebhookHandled::class]);
+        RevolutApi::fake();
+
+        // Pinned, because the outcome below is byte-identical for an event that is NOT in the
+        // catalogue: both take a `return false`. Without this the test would still pass with
+        // the enum reverted to its old 8 cases — i.e. blind to the regression it exists for.
+        // What makes a dispute REACH us is being subscribable, and that is the enum.
+        $this->assertNotNull(RevolutWebhookEvent::tryFrom('DISPUTE_ACTION_REQUIRED'));
+
+        // A dispute is the whole reason the hatch exists: we sync nothing for it, and an app
+        // has to hear about it anyway — DISPUTE_ACTION_REQUIRED is the one with a deadline.
+        $response = $this->postSigned('{"event":"DISPUTE_ACTION_REQUIRED","order_id":"'.RevolutApi::ORDER_ID.'"}');
+
+        // 200: an event we have no opinion about is not a failed delivery. Throwing here
+        // would have Revolut retry it forever — that is what pipeline()'s false prevents.
+        $response->assertOk();
+
+        Event::assertDispatched(WebhookReceived::class, function (WebhookReceived $event): bool {
+            return $event->provider === 'revolut'
+                && $event->payload['event'] === 'DISPUTE_ACTION_REQUIRED';
+        });
+
+        // ...and NOT handled. Nothing was applied to local state, and saying otherwise would
+        // trade the old silence for a lie.
+        Event::assertNotDispatched(WebhookHandled::class);
+    }
+
+    public function test_an_event_outside_the_catalogue_is_ignored_the_same_way(): void
+    {
+        Event::fake([WebhookReceived::class, WebhookHandled::class]);
+        RevolutApi::fake();
+
+        // The OTHER false path — tryFrom() returns null, so it never reaches the match. This
+        // used to be covered by PAYOUT_INITIATED, which is now a real case taking the default
+        // arm instead; the branch was left untested by that shift. It is what an event Revolut
+        // adds after this release will hit, and it must be as inert as the ones we know.
+        $this->assertNull(RevolutWebhookEvent::tryFrom('ORDER_SOMETHING_NEW'));
+
+        $response = $this->postSigned('{"event":"ORDER_SOMETHING_NEW","order_id":"'.RevolutApi::ORDER_ID.'"}');
+
+        $response->assertOk();
+        Event::assertDispatched(WebhookReceived::class);
+        Event::assertNotDispatched(WebhookHandled::class);
     }
 
     public function test_an_invalid_signature_is_rejected_with_400(): void

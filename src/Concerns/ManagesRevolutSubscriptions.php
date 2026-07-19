@@ -17,7 +17,7 @@ use Isapp\CashierRevolut\Models\RevolutSubscription;
 use Isapp\CashierRevolut\RevolutGateway;
 use Isapp\CashierSupport\Contracts\SubscriptionBuilder;
 use Isapp\CashierSupport\DTO\Subscription;
-use Isapp\CashierSupport\Enums\Capability;
+use Isapp\CashierSupport\Enums\Proration;
 use Isapp\CashierSupport\Enums\SubscriptionStatus;
 use Isapp\CashierSupport\Enums\SwapTiming;
 use Isapp\CashierSupport\Events\SubscriptionCanceled;
@@ -31,10 +31,13 @@ use Isapp\CashierSupport\Facades\Cashier;
 /**
  * Subscription lifecycle via the native Revolut Subscriptions API.
  *
- * Revolut has no pause/resume endpoints, so those throw
- * UnsupportedOperationException. Swapping a plan is supported, but not through
- * the update endpoint (which only covers external_reference) — it is a
- * separate command, POST /subscriptions/{id}/change-plan.
+ * Revolut has no pause, resume, immediate-cancel or quantity-change endpoints. Those methods are
+ * deliberately NOT defined here: RevolutGateway extends Gateway\BaseGateway, whose Refuses*
+ * defaults answer them with a typed UnsupportedOperationException and report the capability
+ * unsupported. Defining a throwing stub here would instead make BaseGateway read the method as
+ * "supported" — the exact drift #28/#32 removed. Swapping a plan IS supported, but not through the
+ * update endpoint (which only covers external_reference) — it is a separate command,
+ * POST /subscriptions/{id}/change-plan, scheduled at cycle end and never prorated.
  */
 trait ManagesRevolutSubscriptions
 {
@@ -156,40 +159,19 @@ trait ManagesRevolutSubscriptions
     /**
      * {@inheritDoc}
      *
-     * Revolut cancellation only stops future billing cycles — there is no
-     * immediate-cancel endpoint, so pretending otherwise would silently change
-     * billing semantics. Use cancelSubscription() instead.
-     */
-    public function cancelSubscriptionNow(Model $billable, string $type = 'default'): Subscription
-    {
-        throw UnsupportedOperationException::forCapability(Capability::SubscriptionCancelNow);
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public function resumeSubscription(Model $billable, string $type = 'default'): Subscription
-    {
-        throw UnsupportedOperationException::forCapability(Capability::SubscriptionResume);
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public function pauseSubscription(Model $billable, string $type = 'default'): Subscription
-    {
-        throw UnsupportedOperationException::forCapability(Capability::SubscriptionPause);
-    }
-
-    /**
-     * {@inheritDoc}
-     *
      * The change is scheduled, not immediate: Revolut applies it at the end of
      * the current billing cycle. The customer stays on the old variation — and
      * keeps paying its price — until that cycle completes, and nothing is
      * prorated, so an upgrade does not grant access right away. A trial phase
      * on the target variation is skipped: trials only apply when a
      * subscription is first created.
+     *
+     * $proration is accepted for contract conformance but has no effect here: Revolut applies
+     * the change only at cycle end, where a clean billing boundary leaves no partial period to
+     * prorate. The support guard already refuses Proration::NoProrate for this driver
+     * (SubscriptionNoProration is not declared), so only the default Prorate reaches this method.
+     * How the abstraction should model a gateway that can never prorate is a support question —
+     * see the package CLAUDE.md "not supported" list.
      *
      * $options accepts:
      * - plan_variation_phase_id: which phase of the target variation to start
@@ -204,6 +186,7 @@ trait ManagesRevolutSubscriptions
         string $type,
         string|array $prices,
         SwapTiming $timing = SwapTiming::Immediate,
+        Proration $proration = Proration::Prorate,
         array $options = [],
     ): Subscription {
         // Revolut only ever schedules the change for the end of the cycle. The

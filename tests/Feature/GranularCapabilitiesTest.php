@@ -12,10 +12,11 @@ use Isapp\CashierRevolut\Tests\TestCase;
 use Isapp\CashierSupport\DTO\CheckoutRequest;
 use Isapp\CashierSupport\Enums\Capability;
 use Isapp\CashierSupport\Enums\CheckoutMode;
-use Isapp\CashierSupport\Enums\Currency;
+use Isapp\CashierSupport\Enums\Proration;
 use Isapp\CashierSupport\Enums\SwapTiming;
 use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
 use Isapp\CashierSupport\Facades\Cashier;
+use Money\Currency;
 
 /**
  * What Revolut can honour, stated in the capabilities an app can ask about.
@@ -62,7 +63,7 @@ class GranularCapabilitiesTest extends TestCase
         $user = User::asRevolutCustomer('cus_1');
 
         $this->expectException(UnsupportedOperationException::class);
-        $user->swapSubscription('default', 'plan_var_2', SwapTiming::Immediate);
+        Cashier::provider()->swapSubscription($user, 'default', 'plan_var_2', SwapTiming::Immediate);
     }
 
     public function test_the_default_swap_is_refused_too_because_it_means_immediate(): void
@@ -73,7 +74,7 @@ class GranularCapabilitiesTest extends TestCase
         $user = User::asRevolutCustomer('cus_1');
 
         $this->expectException(UnsupportedOperationException::class);
-        $user->swapSubscription('default', 'plan_var_2');
+        Cashier::provider()->swapSubscription($user, 'default', 'plan_var_2');
     }
 
     public function test_a_deferred_swap_goes_through(): void
@@ -88,10 +89,41 @@ class GranularCapabilitiesTest extends TestCase
             'status' => 'active',
         ]);
 
-        $subscription = $user->swapSubscription('default', 'plan_var_2', SwapTiming::AtPeriodEnd);
+        $subscription = Cashier::provider()->swapSubscription($user, 'default', 'plan_var_2', SwapTiming::AtPeriodEnd);
 
         $this->assertSame('sub_1', $subscription->id);
         Http::assertSent(fn ($request) => str_contains($request->url(), '/subscriptions/sub_1/change-plan'));
+    }
+
+    public function test_a_no_proration_swap_is_refused_because_revolut_never_prorates(): void
+    {
+        // Revolut's change-plan lands at cycle end, where there is no partial period to prorate,
+        // so the driver does not declare SubscriptionNoProration. A caller who explicitly asks for
+        // NoProrate is told at the guard, rather than silently getting a change whose proration it
+        // cannot reason about.
+        $user = User::asRevolutCustomer('cus_1');
+
+        $this->expectException(UnsupportedOperationException::class);
+        Cashier::provider()->swapSubscription($user, 'default', 'plan_var_2', SwapTiming::AtPeriodEnd, Proration::NoProrate);
+    }
+
+    public function test_the_default_proration_goes_through(): void
+    {
+        // Prorate is the ungated baseline, so a deferred swap with the default proration is
+        // accepted — Revolut applies no proration at a clean cycle boundary regardless.
+        $this->fakeRevolut();
+
+        $user = User::asRevolutCustomer('cus_1');
+        $user->subscriptions()->create([
+            'type' => 'default',
+            'provider' => 'revolut',
+            'provider_id' => 'sub_1',
+            'status' => 'active',
+        ]);
+
+        $subscription = Cashier::provider()->swapSubscription($user, 'default', 'plan_var_2', SwapTiming::AtPeriodEnd, Proration::Prorate);
+
+        $this->assertSame('sub_1', $subscription->id);
     }
 
     public function test_a_price_checkout_is_a_cashier_exception_not_a_bare_argument_error(): void
@@ -150,7 +182,7 @@ class GranularCapabilitiesTest extends TestCase
         try {
             $user->checkout(CheckoutRequest::forAmount(
                 amount: 1500,
-                currency: Currency::EUR,
+                currency: new Currency('EUR'),
                 metadata: ['user_id' => 42],
             ));
             $this->fail('A non-string metadata value must not be sent.');
@@ -167,7 +199,7 @@ class GranularCapabilitiesTest extends TestCase
 
         User::asRevolutCustomer('cus_1')->checkout(CheckoutRequest::forAmount(
             amount: 1500,
-            currency: Currency::EUR,
+            currency: new Currency('EUR'),
             metadata: ['user_id' => '42'],
         ));
 
@@ -183,7 +215,7 @@ class GranularCapabilitiesTest extends TestCase
         $this->fakeRevolut();
 
         User::asRevolutCustomer('cus_1')->checkout(
-            CheckoutRequest::forAmount(1500, Currency::EUR),
+            CheckoutRequest::forAmount(1500, new Currency('EUR')),
         );
 
         Http::assertSent(function ($request): bool {
@@ -230,7 +262,7 @@ class GranularCapabilitiesTest extends TestCase
         $this->expectException(UnsupportedOperationException::class);
         User::asRevolutCustomer('cus_1')->checkout(CheckoutRequest::forAmount(
             amount: 1500,
-            currency: Currency::EUR,
+            currency: new Currency('EUR'),
             mode: CheckoutMode::Subscription,
         ));
     }
@@ -244,7 +276,7 @@ class GranularCapabilitiesTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
         User::asRevolutCustomer('cus_1')->checkout(CheckoutRequest::forAmount(
             amount: 1500,
-            currency: Currency::EUR,
+            currency: new Currency('EUR'),
             metadata: ["user_id\n" => '42'],
         ));
     }
@@ -257,7 +289,7 @@ class GranularCapabilitiesTest extends TestCase
 
         $session = $user->checkout(CheckoutRequest::forAmount(
             amount: 1500,
-            currency: Currency::EUR,
+            currency: new Currency('EUR'),
             description: 'One coffee',
             successUrl: 'https://app.test/ok',
         ));

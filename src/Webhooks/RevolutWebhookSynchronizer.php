@@ -73,8 +73,8 @@ class RevolutWebhookSynchronizer
      * reads the body directly, which is honest: a Revolut-native key in a Revolut body.
      *
      * @param  array<string, mixed>  $body
-     * @return bool True when the event was applied; false when this driver does not map
-     *              it, or maps it but the body names no resource to apply it to. Support's
+     * @return bool True when the event was applied; false when this driver does not apply
+     *              it, or applies it but the body names no resource to apply it to. Support's
      *              controller dispatches WebhookHandled only for true.
      *
      * @throws RevolutApiException When the refetch fails for any reason but a 404.
@@ -86,12 +86,17 @@ class RevolutWebhookSynchronizer
         $id = $this->resourceId($body);
 
         if ($event === null || $id === '') {
-            // The rule that replaced the ordering: never throw here. Revolut documents 22
-            // event types and this driver maps 8, so the other 14 — every DISPUTE_* among
-            // them — take this line. They already reached a listener: support dispatched
-            // WebhookReceived above this call, which is the whole of #24's fix.
+            // Not a documented Revolut event at all — a name outside the catalogue, or a body
+            // that points at no resource. Distinct from the default arm below, which is a real
+            // Revolut event we choose not to apply; both return false, and neither may throw.
             return false;
         }
+
+        // The match below is THE map of what this driver applies — the enum is Revolut's
+        // catalogue and says nothing about our coverage, so this is the one place to read it.
+        // The flag is set in the default ARM rather than from a second list beside the match,
+        // because a second list is one that can drift from it.
+        $applied = true;
 
         try {
             match ($event) {
@@ -103,6 +108,12 @@ class RevolutWebhookSynchronizer
                 RevolutWebhookEvent::OrderPaymentDeclined,
                 RevolutWebhookEvent::OrderPaymentFailed,
                 RevolutWebhookEvent::OrderFailed => $this->syncOrder($event, $id),
+                // The 14 we deliver but do not apply — every DISPUTE_* and PAYOUT_* among them.
+                // Never throw, the rule that replaced the ordering: they already reached a
+                // listener, because support dispatched WebhookReceived above this call (#24's
+                // fix) — and since registration now subscribes to the whole catalogue, they
+                // actually arrive for that to be true of.
+                default => $applied = false,
             };
         } catch (RevolutApiException $exception) {
             if ($exception->statusCode !== 404) {
@@ -122,7 +133,7 @@ class RevolutWebhookSynchronizer
             return false;
         }
 
-        return true;
+        return $applied;
     }
 
     /**
