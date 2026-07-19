@@ -23,6 +23,7 @@
         "illuminate/support": "^11.0|^12.0|^13.0",
         "isap-ou/laravel-enum-helpers": "^1.5",
         "isapp/laravel-cashier-support": "^1.0",
+        "moneyphp/money": "^4.9",
         "nesbot/carbon": "^3.0",
         "psr/log": "^3.0",
         "spatie/laravel-data": "^4.23",

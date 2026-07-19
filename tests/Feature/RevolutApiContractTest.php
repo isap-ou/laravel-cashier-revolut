@@ -18,12 +18,13 @@ use Isapp\CashierRevolut\Webhooks\RevolutWebhookSynchronizer;
 use Isapp\CashierRevolut\Webhooks\RevolutWebhookVerifier;
 use Isapp\CashierSupport\Contracts\GatewayProvider;
 use Isapp\CashierSupport\DTO\CheckoutRequest;
-use Isapp\CashierSupport\Enums\Currency;
+use Isapp\CashierSupport\DTO\CustomerDetails;
 use Isapp\CashierSupport\Enums\PaymentStatus;
 use Isapp\CashierSupport\Enums\SubscriptionStatus;
 use Isapp\CashierSupport\Enums\SwapTiming;
 use Isapp\CashierSupport\Exceptions\PaymentFailedException;
 use Isapp\CashierSupport\Facades\Cashier;
+use Money\Currency;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
@@ -62,7 +63,7 @@ class RevolutApiContractTest extends TestCase
 
         $this->assertSame(RevolutApi::ORDER_ID, $payment->id);
         $this->assertSame(500, $payment->amount);
-        $this->assertSame(Currency::GBP, $payment->currency);
+        $this->assertEquals(new Currency('GBP'), $payment->currency);
         $this->assertSame(PaymentStatus::Succeeded, $payment->status);
         $this->assertSame('2023-09-29T14:58:36+00:00', $payment->createdAt?->toIso8601String());
     }
@@ -117,7 +118,7 @@ class RevolutApiContractTest extends TestCase
         RevolutApi::fake();
         $user = User::query()->create(['name' => 'Example Customer', 'email' => 'example.customer@example.com']);
 
-        $customer = $this->gateway()->createCustomer($user);
+        $customer = $this->gateway()->createCustomer($user, new CustomerDetails(name: $user->name, email: $user->email));
 
         $this->assertSame(RevolutApi::CUSTOMER_ID, $customer->id);
         $this->assertSame('Example Customer', $customer->name);
@@ -221,7 +222,7 @@ class RevolutApiContractTest extends TestCase
         $user = $this->customer();
         $this->gateway()->newSubscription($user, 'default', '850e8400-e29b-41d4-a716-446655440003')->create();
 
-        $subscription = $this->gateway()->swapSubscription($user, 'default', '950e8400-e29b-41d4-a716-446655440004', SwapTiming::AtPeriodEnd, [
+        $subscription = $this->gateway()->swapSubscription($user, 'default', '950e8400-e29b-41d4-a716-446655440004', SwapTiming::AtPeriodEnd, options: [
             'plan_variation_phase_id' => 'a60e8400-e29b-41d4-a716-446655440006',
             'reason' => 'merchant_request',
         ]);
@@ -291,7 +292,7 @@ class RevolutApiContractTest extends TestCase
         $this->assertSame(RevolutApi::REFUND_ID, $refund->id);
         $this->assertSame($originalOrderId, $refund->paymentId);
         $this->assertSame(100, $refund->amount);
-        $this->assertSame(Currency::GBP, $refund->currency);
+        $this->assertEquals(new Currency('GBP'), $refund->currency);
         $this->assertSame('2025-06-18T16:30:30+00:00', $refund->createdAt?->toIso8601String());
     }
 
@@ -301,7 +302,7 @@ class RevolutApiContractTest extends TestCase
 
         $session = $this->gateway()->checkout(
             $this->customer(),
-            CheckoutRequest::forAmount(500, Currency::GBP),
+            CheckoutRequest::forAmount(500, new Currency('GBP')),
         );
 
         $this->assertSame(RevolutApi::ORDER_ID, $session->id());

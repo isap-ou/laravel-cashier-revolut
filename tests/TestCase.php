@@ -11,7 +11,6 @@ use Isapp\CashierRevolut\CashierRevolutServiceProvider;
 use Isapp\CashierSupport\CashierSupportServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 use Spatie\LaravelData\LaravelDataServiceProvider;
-use Spatie\LaravelPdf\PdfServiceProvider;
 
 abstract class TestCase extends Orchestra
 {
@@ -23,7 +22,6 @@ abstract class TestCase extends Orchestra
     {
         return [
             LaravelDataServiceProvider::class,
-            PdfServiceProvider::class,
             CashierSupportServiceProvider::class,
             CashierRevolutServiceProvider::class,
         ];

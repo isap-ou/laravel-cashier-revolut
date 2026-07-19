@@ -9,6 +9,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Isapp\CashierRevolut\Exceptions\RevolutApiException;
 use Isapp\CashierRevolut\Http\RevolutConnector;
+use Isapp\CashierSupport\Casts\CurrencyCast;
 use Isapp\CashierSupport\Exceptions\CustomerNotFoundException;
 use Spatie\LaravelData\Exceptions\CannotCastDate;
 use Spatie\LaravelData\Exceptions\CannotCreateData;
@@ -83,14 +84,21 @@ trait InteractsWithRevolut
     }
 
     /**
-     * Resolve the upper-case ISO currency code from options or config.
+     * Resolve and validate the ISO-4217 currency code from options or config.
+     *
+     * Validated at the boundary the same way the response side is (Casts\CurrencyCast): a bad
+     * caller-supplied code is a programmer error, so it raises SPL InvalidArgumentException here
+     * rather than being sent and bounced back as an opaque Revolut 4xx. CurrencyCast::fromCode
+     * also normalises case, so the returned code is upper-cased.
      *
      * @param  array<string, mixed>  $options
+     *
+     * @throws \InvalidArgumentException When the code is not a known ISO-4217 currency.
      */
     protected function currencyFromOptions(array $options): string
     {
         $currency = $options['currency'] ?? config('cashier-support.currency', 'EUR');
 
-        return strtoupper(is_string($currency) ? $currency : 'EUR');
+        return CurrencyCast::fromCode(is_string($currency) ? $currency : 'EUR')->getCode();
     }
 }

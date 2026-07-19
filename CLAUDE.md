@@ -96,7 +96,7 @@ src/
 | SetupIntent               | Save card via Checkout Widget                |
 | Checkout Session          | Revolut Checkout Widget / hosted page        |
 | Webhook (stripe/webhook)  | POST webhook → ORDER_COMPLETED etc.          |
-| Invoice                   | Local generation via cashier-support           |
+| Invoice                   | Local data (cashier-support) + driver-rendered (support#33) — deferred |
 | PaymentMethod (list/get/delete) | GET/DELETE /customers/{id}/payment-methods |
 | PaymentMethod (add)       | Not supported (only via checkout widget)      |
 | Refund                    | POST /orders/{id}/refund                     |
@@ -104,7 +104,7 @@ src/
 ## Key differences from Stripe
 
 1. **Subscriptions** — plan-based model (plan → variation → phases) vs Stripe's price-based. No native pause/resume endpoints (`paused` state exists but no API trigger). Swap exists as a separate command (`POST /subscriptions/{id}/change-plan`), but is scheduled at cycle end — never prorated, and it skips a trial on the target variation. Update limited to `external_reference` only. Unsupported operations throw `UnsupportedOperationException`.
-2. **Invoices** — Revolut has no invoice API. Generated locally by cashier-support from payment/subscription data.
+2. **Invoices** — Revolut has no invoice API. support assembles the invoice DATA locally; RENDERING is the driver's since support#33, and is currently **DEFERRED** — the `Invoices` capability is unsupported until the renderer's engine and layout are decided (the webhook synchronizer still writes the local invoice rows). See `.claude/rules/smart-stubs.md`.
 3. **Checkout** — Revolut Checkout Widget (JS) instead of Stripe Checkout hosted page.
 4. **Currency** — Revolut supports 30+ currencies, amounts in minor units (cents).
 
@@ -172,6 +172,16 @@ in a provider-agnostic contract at all" answered first, and it is not what the h
 customer-lifecycle webhooks, so a customer deleted at Revolut leaves a local record claiming an
 active subscription against a dead id. Pairs with support#36 (no local → gateway sync): the drift
 is bidirectional, so fixing either half alone still leaves the records able to diverge.
+
+**Reworked onto the current support (2026-07-19).** The gateway now extends `Gateway\BaseGateway`,
+so `capabilities()`/`supports()` are DERIVED from overridden methods — the unsupported operations
+(pause, resume, cancel-now, add-payment-method, quantity) are inherited `Refuses*` refusals, not
+hand-written stubs. That was #32. **Do not re-add a throwing stub for an inherited refusal:** under
+BaseGateway an overridden method reads as "supported", so a stub would *falsely* claim the
+capability — the exact drift #32 removed. One shape to keep: **Invoices is deferred.** support#33
+made rendering the driver's job (`Contracts\InvoiceRenderer`/`RendersInvoices`), and its
+engine/layout/contents are an open question, so the driver ships no renderer and `Invoices` reports
+unsupported — while the synchronizer still writes the local invoice rows, so no data is lost.
 
 Where this driver is deliberately **better** than the references (keep it): signature
 verification is mandatory and a missing secret is a hard failure (both references silently skip

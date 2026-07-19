@@ -54,11 +54,11 @@ class RevolutApiException extends CashierException
     }
 
     /**
-     * A currency this package's Currency enum does not cover. Money records
-     * must never fall back to a default currency.
+     * A currency that is not a known ISO-4217 code (validated by support's CurrencyCast against
+     * moneyphp's ISOCurrencies). Money records must never fall back to a default currency.
      */
     public static function unsupportedCurrency(string $currency): self
     {
-        return new self("Unsupported currency [{$currency}] — extend Isapp\\CashierSupport\\Enums\\Currency.");
+        return new self("Unsupported currency [{$currency}] — not a known ISO 4217 currency code.");
     }
 }

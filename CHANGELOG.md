@@ -11,6 +11,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > its pre-release history has been collapsed into this one entry rather than
 > carried as a version trail that describes tags nobody ever installed.
 
+### Reworked onto the current cashier-support
+
+- **`RevolutGateway` now extends `Gateway\BaseGateway`.** `capabilities()` and `supports()` are no
+  longer hand-written — they are derived from the methods the driver actually overrides, and the
+  operations Revolut cannot do (cancel-now, pause, resume, add-payment-method, quantity-update) are
+  inherited `Refuses*` refusals instead of throwing stubs. Only the three intents no method can
+  express are declared: `SubscriptionSwapAtPeriodEnd`, `SubscriptionTrials`, `CheckoutAmount`.
+  Closes the driver's #32. A stub must never be re-added for an inherited refusal: under BaseGateway
+  an overridden method reads as *supported*, so a stub would falsely claim the capability.
+- **`updateCustomer()` is now supported** (`Capability::CustomersUpdate`), via
+  `PATCH /api/customers/{id}` — only the named fields are sent, so an unmentioned one is left
+  untouched at the gateway. `createCustomer()` now takes a typed `DTO\CustomerDetails`
+  (support#52) instead of an untyped options array.
+- **Currency is a `Money\Currency`, not an enum** (support#32). `OrderResponse`/`RefundResponse`
+  build it through support's `Casts\CurrencyCast`, keeping a bad code a catchable
+  `RevolutApiException` rather than the cast's `InvalidArgumentException`; the driver adds a direct
+  `moneyphp/money` dependency. `CheckoutRequest::forAmount(1500, new Currency('EUR'))`.
+- **`swapSubscription()` gains a `Proration` parameter** (support#53) to match the current
+  contract. Pause, resume and cancel-now are no longer defined in the driver at all — they inherit
+  `BaseGateway`'s refusals, which already carry the current signatures for free (pause's
+  `?DateTimeInterface $until`, support#72). Revolut swaps only at cycle end and never prorates, so
+  the driver accepts the proration intent but does not act on it, and does not declare
+  `SubscriptionNoProration` — the support guard therefore refuses a `NoProrate` swap. How the
+  abstraction should model a gateway that can never prorate is an open support question.
+- **Invoices are deferred.** support#33 moved invoice *rendering* to the driver
+  (`Contracts\InvoiceRenderer`/`RendersInvoices`); its engine, layout and contents are an open
+  design question, so the driver ships no renderer and `Invoices` reports unsupported. The webhook
+  synchronizer still writes the local invoice rows, so no data is lost.
+- **A charge routed to 3DS/SCA now surfaces, instead of stalling silently** (support#35). When
+  `POST /orders/{id}/payments` comes back `authentication_challenge`, `charge()` returns a
+  `Payment` with `RequiresAction` status carrying the order token as its `clientSecret` — as data,
+  not a throw. support's `Concerns\PerformsCharges` turns that into a catchable
+  `IncompletePaymentException` the frontend can resume from. Payment state is mapped through the
+  new `Http\Responses\PaymentResponse`.
+- **A bad caller-supplied currency is caught before the request, not after.**
+  `currencyFromOptions()` now validates the code against ISO-4217 via support's `CurrencyCast` (the
+  same validation the response side uses), so `charge` and `refund` raise `InvalidArgumentException`
+  for a malformed code rather than sending it and surfacing Revolut's opaque 4xx. (`checkout()`
+  already took a typed `Money\Currency` and is unaffected.) **Upgrade note:** a misconfigured
+  `CASHIER_CURRENCY` (a non-ISO-4217 value) now fails fast on every charge/refund that omits an
+  explicit currency, rather than a per-call gateway 4xx — set it to a valid ISO code (a lowercase
+  code such as `eur` is fine, it is upper-cased).
+
 ### Added
 
 - **A scheduled plan change is now visible to the app.** Revolut reports it back on

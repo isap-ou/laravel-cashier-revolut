@@ -15,30 +15,29 @@ use Isapp\CashierRevolut\Enums\RevolutWebhookEvent;
 use Isapp\CashierRevolut\Http\RevolutConnector;
 use Isapp\CashierRevolut\Webhooks\RevolutWebhookSynchronizer;
 use Isapp\CashierRevolut\Webhooks\RevolutWebhookVerifier;
-use Isapp\CashierSupport\Contracts\GatewayProvider;
 use Isapp\CashierSupport\Contracts\RegistersWebhooks;
 use Isapp\CashierSupport\DTO\WebhookRegistration;
 use Isapp\CashierSupport\Enums\Capability;
 use Isapp\CashierSupport\Exceptions\CashierException;
+use Isapp\CashierSupport\Gateway\BaseGateway;
 use Isapp\CashierSupport\Gateway\ManagesCustomerRecords;
-use Isapp\CashierSupport\Gateway\ManagesLocalInvoices;
-use Isapp\CashierSupport\Invoice\InvoiceRenderer;
 
 /**
  * The Revolut Merchant API implementation of the cashier-support
  * GatewayProvider contract. Registered as the "revolut" driver.
  *
- * Invoices use cashier-support's local-invoice implementation: records are
- * written by the webhook synchronizer from completed orders and rendered to
- * PDF locally (Revolut has no invoice API).
+ * Invoices are deferred (Invoices capability is NOT supported for now). Revolut has no invoice
+ * API, so an invoice must be assembled locally (Gateway\ManagesLocalInvoices) and rendered by a
+ * driver-supplied Contracts\InvoiceRenderer (support#33). The renderer is a separate issue: its
+ * layout and the data it carries are an open design question, so this driver does not mix in
+ * ManagesLocalInvoices and BaseGateway's RefusesInvoices reports Invoices unsupported.
  */
-class RevolutGateway implements GatewayProvider, RegistersWebhooks
+class RevolutGateway extends BaseGateway implements RegistersWebhooks
 {
     use HandlesRevolutCheckout;
     use HandlesRevolutWebhooks;
     use InteractsWithRevolut;
     use ManagesCustomerRecords;
-    use ManagesLocalInvoices;
     use ManagesRevolutCustomer;
     use ManagesRevolutPaymentMethods;
     use ManagesRevolutSubscriptions;
@@ -53,7 +52,6 @@ class RevolutGateway implements GatewayProvider, RegistersWebhooks
         RevolutConnector $connector,
         RevolutWebhookVerifier $webhookVerifier,
         RevolutWebhookSynchronizer $webhookSynchronizer,
-        InvoiceRenderer $invoiceRenderer,
     ) {
         $this->connector = $connector;
         $this->webhookVerifier = $webhookVerifier;
@@ -61,7 +59,6 @@ class RevolutGateway implements GatewayProvider, RegistersWebhooks
         // driver's own controller held both it and the verifier, which is precisely why
         // the sequencing between them was this package's to get wrong.
         $this->webhookSynchronizer = $webhookSynchronizer;
-        $this->invoiceRenderer = $invoiceRenderer;
     }
 
     /**
@@ -119,37 +116,29 @@ class RevolutGateway implements GatewayProvider, RegistersWebhooks
     }
 
     /**
-     * The capabilities Revolut actually supports.
+     * The capabilities no GatewayProvider method can express — so BaseGateway cannot read
+     * them off the code, and the driver must name them.
      *
-     * Immediate cancellation, pause and resume of subscriptions, adding a
-     * payment method server-side, and taxes are intentionally absent — those
-     * operations throw UnsupportedOperationException. Swap is supported, but
-     * it is scheduled at the end of the billing cycle rather than immediate.
+     * Everything else Revolut supports is DERIVED from an overridden method (Charges,
+     * Refunds, Customers, CustomersUpdate, Subscriptions, PaymentMethodsList,
+     * PaymentMethodsDelete, Webhooks); everything it cannot do — and Invoices, deferred until
+     * the renderer question is settled — is left to BaseGateway's Refuses* defaults and reported
+     * unsupported. Only these three are an
+     * intent behind one method and must be declared:
+     *  - SubscriptionSwapAtPeriodEnd — swapSubscription() is one method behind two timings,
+     *    and Revolut only ever schedules the change for cycle end (never SubscriptionSwapImmediate).
+     *  - SubscriptionTrials — a Contracts\SubscriptionBuilder setter, not a method on this object.
+     *  - CheckoutAmount — checkout() is one method behind two shapes; Revolut takes an amount,
+     *    not a price catalogue (never CheckoutPrices).
      *
      * {@inheritDoc}
      */
-    public function capabilities(): array
+    protected function declaredCapabilities(): array
     {
         return [
-            Capability::Charges,
-            Capability::Refunds,
-            Capability::Customers,
-            Capability::Subscriptions,
-            Capability::SubscriptionTrials,
             Capability::SubscriptionSwapAtPeriodEnd,
-            Capability::PaymentMethodsList,
-            Capability::PaymentMethodsDelete,
+            Capability::SubscriptionTrials,
             Capability::CheckoutAmount,
-            Capability::Invoices,
-            Capability::Webhooks,
         ];
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public function supports(Capability $capability): bool
-    {
-        return in_array($capability, $this->capabilities(), true);
     }
 }

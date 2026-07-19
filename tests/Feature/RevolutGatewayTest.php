@@ -18,16 +18,18 @@ use Isapp\CashierRevolut\Tests\Fixtures\User;
 use Isapp\CashierRevolut\Tests\TestCase;
 use Isapp\CashierSupport\Contracts\GatewayProvider;
 use Isapp\CashierSupport\DTO\CheckoutRequest;
+use Isapp\CashierSupport\DTO\CustomerDetails;
 use Isapp\CashierSupport\Enums\Capability;
-use Isapp\CashierSupport\Enums\Currency;
 use Isapp\CashierSupport\Enums\PaymentStatus;
 use Isapp\CashierSupport\Enums\SwapTiming;
 use Isapp\CashierSupport\Events\RefundProcessed;
 use Isapp\CashierSupport\Events\SubscriptionPriceChangeScheduled;
+use Isapp\CashierSupport\Exceptions\IncompletePaymentException;
 use Isapp\CashierSupport\Exceptions\PaymentFailedException;
 use Isapp\CashierSupport\Exceptions\SubscriptionUpdateFailure;
 use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
 use Isapp\CashierSupport\Facades\Cashier;
+use Money\Currency;
 
 class RevolutGatewayTest extends TestCase
 {
@@ -75,7 +77,8 @@ class RevolutGatewayTest extends TestCase
         $this->assertTrue($gateway->supports(Capability::CheckoutAmount));
         $this->assertFalse($gateway->supports(Capability::CheckoutPrices));
         $this->assertTrue($gateway->supports(Capability::PaymentMethodsList));
-        $this->assertFalse($gateway->supports(Capability::SubscriptionPause));
+        $this->assertTrue($gateway->supports(Capability::CustomersUpdate));
+        $this->assertFalse($gateway->supports(Capability::SubscriptionPauseImmediate));
         $this->assertFalse($gateway->supports(Capability::PaymentMethodsAdd));
     }
 
@@ -84,7 +87,7 @@ class RevolutGatewayTest extends TestCase
         $this->fakeRevolut();
         $user = User::query()->create(['name' => 'Ada', 'email' => 'ada@example.com']);
 
-        $customer = $this->gateway()->createCustomer($user);
+        $customer = $this->gateway()->createCustomer($user, new CustomerDetails(name: $user->name, email: $user->email));
 
         $this->assertSame('cus_1', $customer->id);
         $this->assertSame('cus_1', $user->customerId());
@@ -101,6 +104,42 @@ class RevolutGatewayTest extends TestCase
         $this->assertSame(1500, $payment->amount);
         $this->assertSame(PaymentStatus::Succeeded, $payment->status);
         Http::assertSent(fn ($request) => str_contains($request->url(), '/orders/ord_1/payments'));
+    }
+
+    public function test_a_charge_routed_to_3ds_returns_a_requires_action_payment_with_the_order_token(): void
+    {
+        Http::fake([
+            '*/orders/*/payments' => Http::response(['id' => 'pay_1', 'state' => 'authentication_challenge']),
+            '*/orders' => Http::response(['id' => 'ord_1', 'amount' => 1500, 'currency' => 'EUR', 'token' => 'tok_1', 'state' => 'pending']),
+        ]);
+
+        $payment = $this->gateway()->charge($this->customer(), 1500, 'pm_1', ['currency' => 'EUR']);
+
+        // Returned as DATA, not thrown: the order token is the client secret the frontend uses to
+        // complete the 3DS challenge. support's PerformsCharges concern is what turns it into an
+        // exception on the Billable path (see the next test).
+        $this->assertSame(PaymentStatus::RequiresAction, $payment->status);
+        $this->assertTrue($payment->requiresAction());
+        $this->assertSame('ord_1', $payment->id);
+        $this->assertSame('tok_1', $payment->clientSecret);
+        $this->assertSame(1500, $payment->amount);
+    }
+
+    public function test_a_3ds_charge_surfaces_as_an_incomplete_payment_exception_via_billable(): void
+    {
+        Http::fake([
+            '*/orders/*/payments' => Http::response(['id' => 'pay_1', 'state' => 'authentication_challenge']),
+            '*/orders' => Http::response(['id' => 'ord_1', 'amount' => 1500, 'currency' => 'EUR', 'token' => 'tok_1', 'state' => 'pending']),
+        ]);
+
+        try {
+            $this->customer()->charge(1500, 'pm_1', ['currency' => 'EUR']);
+            $this->fail('Expected IncompletePaymentException.');
+        } catch (IncompletePaymentException $e) {
+            $this->assertSame('ord_1', $e->paymentId);
+            $this->assertSame('tok_1', $e->clientSecret);
+            $this->assertSame(PaymentStatus::RequiresAction, $e->status);
+        }
     }
 
     public function test_it_refunds_an_order(): void
@@ -277,7 +316,7 @@ class RevolutGatewayTest extends TestCase
         $user = $this->customer();
         $this->gateway()->newSubscription($user, 'default', 'plan_var_1')->create('pm_1');
 
-        $subscription = $this->gateway()->swapSubscription($user, 'default', 'plan_var_2', SwapTiming::AtPeriodEnd, [
+        $subscription = $this->gateway()->swapSubscription($user, 'default', 'plan_var_2', SwapTiming::AtPeriodEnd, options: [
             'reason' => RevolutChangePlanReason::CustomerRequest,
         ]);
 
@@ -456,7 +495,7 @@ class RevolutGatewayTest extends TestCase
 
         $session = $this->gateway()->checkout(
             $this->customer(),
-            CheckoutRequest::forAmount(1500, Currency::EUR),
+            CheckoutRequest::forAmount(1500, new Currency('EUR')),
         );
 
         $this->assertInstanceOf(RevolutCheckoutSession::class, $session);
@@ -478,7 +517,8 @@ class RevolutGatewayTest extends TestCase
         Http::fake(['*/customers' => Http::response(['message' => 'Invalid email.'], 422)]);
 
         try {
-            $this->gateway()->createCustomer(User::query()->create(['email' => 'bad']));
+            $user = User::query()->create(['email' => 'bad']);
+            $this->gateway()->createCustomer($user, new CustomerDetails(name: $user->name, email: $user->email));
             $this->fail('Expected RevolutApiException.');
         } catch (RevolutApiException $e) {
             $this->assertSame(422, $e->statusCode);

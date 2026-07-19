@@ -103,7 +103,7 @@ class SubscriptionEventsTest extends TestCase
 
         $user = $this->subscribed();
 
-        $user->cancelSubscription('default');
+        $user->subscription('default')->cancel();
 
         Event::assertDispatchedTimes(SubscriptionCanceled::class, 1);
     }
@@ -117,7 +117,7 @@ class SubscriptionEventsTest extends TestCase
         ]);
 
         $user = $this->subscribed();
-        $user->cancelSubscription('default');
+        $user->subscription('default')->cancel();
 
         Event::fake([SubscriptionCanceled::class]);
 
@@ -187,12 +187,12 @@ class SubscriptionEventsTest extends TestCase
         ]);
 
         $user = $this->subscribed();
-        $user->cancelSubscription('default');
+        $user->subscription('default')->cancel();
 
         Event::fake([SubscriptionCanceled::class]);
         Http::fake();
 
-        $user->cancelSubscription('default');
+        $user->subscription('default')->cancel();
 
         Event::assertNotDispatched(SubscriptionCanceled::class);
         // And it does not even ask: the API would refuse.
@@ -223,7 +223,7 @@ class SubscriptionEventsTest extends TestCase
             'status' => 'incomplete',
         ]);
 
-        $user->cancelSubscription('default');
+        $user->subscription('default')->cancel();
 
         Event::assertNotDispatched(SubscriptionCanceled::class);
     }

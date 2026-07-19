@@ -12,6 +12,7 @@ use Isapp\CashierRevolut\Http\Requests\OrderCustomerRequest;
 use Isapp\CashierRevolut\Http\Requests\PayOrderRequest;
 use Isapp\CashierRevolut\Http\Requests\RefundOrderRequest;
 use Isapp\CashierRevolut\Http\Responses\OrderResponse;
+use Isapp\CashierRevolut\Http\Responses\PaymentResponse;
 use Isapp\CashierRevolut\Http\Responses\RefundResponse;
 use Isapp\CashierSupport\DTO\Payment;
 use Isapp\CashierSupport\DTO\Refund;
@@ -61,10 +62,26 @@ trait PerformsRevolutCharges
 
             $type = is_string($options['payment_method_type'] ?? null) ? $options['payment_method_type'] : null;
 
-            $this->revolut()->post(
+            $payment = PaymentResponse::from($this->revolut()->post(
                 "/orders/{$order->id}/payments",
                 (new PayOrderRequest($paymentMethod, $type))->payload(),
-            );
+            )->json() ?? []);
+
+            if ($payment->requiresAction()) {
+                // 3DS/SCA: the customer must finish the challenge in the Checkout Widget with the
+                // order token before this settles. Returned as INCOMPLETE data — a Payment with
+                // RequiresAction status carrying that token as the client secret — never a throw:
+                // support's Concerns\PerformsCharges turns a requires-action Payment into a
+                // catchable IncompletePaymentException (ChargeOperations::charge docblock).
+                return new Payment(
+                    id: $order->id,
+                    amount: $order->amount,
+                    currency: $order->currencyEnum(),
+                    status: PaymentStatus::RequiresAction,
+                    clientSecret: $order->token,
+                    createdAt: $order->createdAt,
+                );
+            }
 
             return $this->settledPayment($order->id);
         });
@@ -120,6 +137,7 @@ trait PerformsRevolutCharges
      * from the Revolut dashboard.
      *
      * @throws PaymentFailedException When Revolut rejects the refund.
+     * @throws \InvalidArgumentException When a supplied currency code is not a known ISO-4217 code.
      *
      * @see https://developer.revolut.com/docs/api/merchant/operations/refund-order
      * @see https://developer.revolut.com/docs/api/merchant/operations/create-webhook

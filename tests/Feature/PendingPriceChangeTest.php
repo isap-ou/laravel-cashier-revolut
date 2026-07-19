@@ -14,6 +14,7 @@ use Isapp\CashierRevolut\Webhooks\RevolutWebhookSynchronizer;
 use Isapp\CashierSupport\Enums\SwapTiming;
 use Isapp\CashierSupport\Events\SubscriptionPriceChangeScheduled;
 use Isapp\CashierSupport\Events\SubscriptionUpdated;
+use Isapp\CashierSupport\Facades\Cashier;
 
 /**
  * A swap Revolut has scheduled but not applied.
@@ -75,7 +76,7 @@ class PendingPriceChangeTest extends TestCase
 
         $user = $this->subscribedUser();
 
-        $subscription = $user->swapSubscription('default', 'plan_var_2', SwapTiming::AtPeriodEnd);
+        $subscription = Cashier::provider()->swapSubscription($user, 'default', 'plan_var_2', SwapTiming::AtPeriodEnd);
 
         // The DTO answers the question the app actually has.
         $this->assertSame('plan_var_2', $subscription->pendingPrice);
@@ -103,7 +104,7 @@ class PendingPriceChangeTest extends TestCase
         ]);
 
         $user = $this->subscribedUser();
-        $user->swapSubscription('default', 'plan_var_2', SwapTiming::AtPeriodEnd);
+        $user->subscription('default')->swap('plan_var_2', SwapTiming::AtPeriodEnd);
 
         $this->assertSame('plan_var_9', RevolutSubscription::query()->firstOrFail()->pendingPrice());
     }
@@ -121,7 +122,7 @@ class PendingPriceChangeTest extends TestCase
             'plan_variation_id' => 'plan_var_2',
         ]);
 
-        $this->subscribedUser()->swapSubscription('default', 'plan_var_2', SwapTiming::AtPeriodEnd);
+        $this->subscribedUser()->subscription('default')->swap('plan_var_2', SwapTiming::AtPeriodEnd);
 
         Event::assertDispatched(SubscriptionPriceChangeScheduled::class);
         Event::assertNotDispatched(SubscriptionUpdated::class);
@@ -170,7 +171,7 @@ class PendingPriceChangeTest extends TestCase
         $this->fakeSubscription(null);
 
         $user = $this->subscribedUser();
-        $subscription = $user->swapSubscription('default', 'plan_var_2', SwapTiming::AtPeriodEnd);
+        $subscription = Cashier::provider()->swapSubscription($user, 'default', 'plan_var_2', SwapTiming::AtPeriodEnd);
 
         $this->assertSame('plan_var_2', $subscription->pendingPrice);
         $this->assertSame('plan_var_2', RevolutSubscription::query()->firstOrFail()->pendingPrice());
@@ -198,7 +199,7 @@ class PendingPriceChangeTest extends TestCase
         ]);
 
         $user = $this->subscribedUser();
-        $user->swapSubscription('default', 'plan_var_2', SwapTiming::AtPeriodEnd);
+        $user->subscription('default')->swap('plan_var_2', SwapTiming::AtPeriodEnd);
 
         $record = RevolutSubscription::query()->firstOrFail();
 
@@ -235,7 +236,7 @@ class PendingPriceChangeTest extends TestCase
             'next_price_starts_at' => '2099-08-01T00:00:00Z',
         ])->save();
 
-        $user->cancelSubscription('default');
+        $user->subscription('default')->cancel();
 
         $this->assertFalse(RevolutSubscription::query()->firstOrFail()->hasPendingPriceChange());
     }
@@ -250,7 +251,7 @@ class PendingPriceChangeTest extends TestCase
         ]);
 
         $user = $this->subscribedUser();
-        $user->swapSubscription('default', 'plan_var_2', SwapTiming::AtPeriodEnd);
+        $user->subscription('default')->swap('plan_var_2', SwapTiming::AtPeriodEnd);
 
         $this->assertFalse(RevolutSubscription::query()->firstOrFail()->hasPendingPriceChange());
     }

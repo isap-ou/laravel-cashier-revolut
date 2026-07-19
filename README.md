@@ -47,10 +47,13 @@ $user->charge(1500, $savedPaymentMethodId, ['currency' => 'eur']);
 $user->refund($orderId, ['amount' => 500]);
 
 $user->newSubscription('default', $planVariationId)->trialDays(14)->create($savedPaymentMethodId);
-$user->swapSubscription('default', $newPlanVariationId, SwapTiming::AtPeriodEnd);
-$user->cancelSubscription('default');
 
-$session = $user->checkout(CheckoutRequest::forAmount(1500, Currency::EUR));
+// Lifecycle mutations live on the subscription model (support #39), not on the billable.
+$user->subscription('default')->swap($newPlanVariationId, SwapTiming::AtPeriodEnd);
+$user->subscription('default')->cancel();
+
+// Currency is a moneyphp Money\Currency (support #32), no longer an enum.
+$session = $user->checkout(CheckoutRequest::forAmount(1500, new Currency('EUR')));
 return $session; // Responsable — redirects to the hosted checkout
 ```
 
@@ -58,19 +61,41 @@ Money is always **integer minor units** (cents).
 
 ## What Revolut supports
 
-| Capability | Supported |
-|---|---|
-| Charges, Refunds, Customers | ✅ |
-| Subscriptions (create, cancel, trials) | ✅ (native Subscriptions API) |
-| Subscription swap | ✅ (scheduled at cycle end — see below) |
-| Payment methods (list, delete) | ✅ |
-| Checkout (widget) | ✅ |
-| Webhooks | ✅ |
-| Subscription pause / resume | ❌ `UnsupportedOperationException` |
-| Add payment method server-side | ❌ (only via the checkout widget) |
+Every capability `isapp/laravel-cashier-support` defines (`Enums\Capability`), and whether this
+driver backs it. The gateway extends `Gateway\BaseGateway`, so support is **derived from the
+code** — a capability holds only when the method(s) behind it are actually implemented — and this
+table cannot drift from what `Cashier::supports(...)` returns.
 
-Unsupported operations throw `UnsupportedOperationException` rather than being
-faked — check `Cashier::supports(Capability::…)` before calling.
+| `Capability` | Revolut | Notes |
+|---|:---:|---|
+| `Charges` | ✅ | `POST /orders` → `POST /orders/{id}/payments` |
+| `Refunds` | ✅ | `POST /orders/{id}/refund` (full or partial) |
+| `Customers` | ✅ | `POST` / `GET /customers` |
+| `CustomersUpdate` | ✅ | `PATCH /customers/{id}` |
+| `Subscriptions` | ✅ | native Subscriptions API (create, cancel) |
+| `SubscriptionTrials` | ✅ | `trial_duration` at creation |
+| `SubscriptionSwapAtPeriodEnd` | ✅ | `POST /subscriptions/{id}/change-plan` — see below |
+| `PaymentMethodsList` | ✅ | `GET /customers/{id}/payment-methods` |
+| `PaymentMethodsDelete` | ✅ | `DELETE /customers/{id}/payment-methods/{id}` |
+| `CheckoutAmount` | ✅ | Checkout Widget / hosted page (an amount) |
+| `Webhooks` | ✅ | verified + handled — 8 of Revolut's 22 events mapped (see [Webhooks](#webhooks)) |
+| `Invoices` | ⏸️ | Revolut has no invoice API; local rendering is **deferred** — engine + layout are an open question |
+| `SubscriptionCancelNow` | ❌ | cancel stops future billing but keeps the paid cycle; no distinct immediate terminate |
+| `SubscriptionPauseImmediate` | ❌ | no pause endpoint (`paused` is a state with no trigger) |
+| `SubscriptionResume` | ❌ | no resume endpoint |
+| `SubscriptionSwapImmediate` | ❌ | `change-plan` is `at_cycle_end` only |
+| `SubscriptionQuantity` | ❌ | a subscription carries no quantity field |
+| `SubscriptionQuantityUpdate` | ❌ | — |
+| `SubscriptionMetadata` | ❌ | no metadata map; correlation is `external_reference` |
+| `SubscriptionNoProration` | ❌ | a change lands at cycle end and never prorates (open support question) |
+| `PaymentMethodsAdd` | ❌ | no API to add a method — only via the checkout widget |
+| `CheckoutPrices` | ❌ | no checkout price catalogue |
+| `Taxes` | ❌ | no tax API |
+| `Discounts` | ❌ | no invoice discount |
+
+✅ backed · ⏸️ deferred (tracked as its own issue) · ❌ not offered by the Revolut API — the
+operation throws `UnsupportedOperationException` rather than being faked. Check
+`Cashier::supports(Capability::…)` before calling.
 
 ### Swapping a plan is scheduled, not immediate
 

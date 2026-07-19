@@ -75,7 +75,7 @@ class SubscriptionMetadataTest extends TestCase
         // The support gate is bypassed when the driver's builder is used directly.
         $this->fakeRevolut();
 
-        $builder = Cashier::provider()->newSubscription(
+        $builder = app(RevolutGateway::class)->newSubscription(
             User::asRevolutCustomer('cus_1'),
             'default',
             'plan_var_1',
@@ -91,7 +91,7 @@ class SubscriptionMetadataTest extends TestCase
     {
         $this->fakeRevolut();
 
-        $builder = Cashier::provider()->newSubscription(
+        $builder = app(RevolutGateway::class)->newSubscription(
             User::asRevolutCustomer('cus_1'),
             'default',
             'plan_var_1',
@@ -138,7 +138,7 @@ class SubscriptionMetadataTest extends TestCase
             'status' => 'active',
         ]);
 
-        $gateway = Cashier::provider();
+        $gateway = app(RevolutGateway::class);
         $this->assertInstanceOf(RevolutGateway::class, $gateway);
 
         $this->assertSame('order_7', $gateway->subscriptionExternalReference($user));

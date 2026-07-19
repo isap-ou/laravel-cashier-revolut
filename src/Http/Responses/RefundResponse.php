@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Isapp\CashierRevolut\Http\Responses;
 
 use Carbon\CarbonImmutable;
+use InvalidArgumentException;
 use Isapp\CashierRevolut\Enums\RevolutOrderState;
 use Isapp\CashierRevolut\Exceptions\RevolutApiException;
+use Isapp\CashierSupport\Casts\CurrencyCast;
 use Isapp\CashierSupport\DTO\Refund;
-use Isapp\CashierSupport\Enums\Currency;
+use Money\Currency;
 use Spatie\LaravelData\Attributes\MapInputName;
 use Spatie\LaravelData\Attributes\WithCast;
 use Spatie\LaravelData\Casts\DateTimeInterfaceCast;
@@ -59,9 +61,25 @@ class RefundResponse extends Data
             paymentId: $paymentId,
             amount: $this->amount,
             currency: $this->currency !== null
-                ? (Currency::tryFrom(strtoupper($this->currency)) ?? throw RevolutApiException::unsupportedCurrency($this->currency))
+                ? $this->currencyOrFail($this->currency)
                 : throw RevolutApiException::unsupportedCurrency('(missing)'),
             createdAt: $this->createdAt,
         );
+    }
+
+    /**
+     * A currency Revolut sent that is not a known ISO-4217 code is bad gateway data,
+     * not a programmer error — surfaced as a catchable RevolutApiException rather than
+     * the InvalidArgumentException CurrencyCast raises at the support boundary.
+     *
+     * @throws RevolutApiException When the currency is not a known ISO-4217 code.
+     */
+    private function currencyOrFail(string $code): Currency
+    {
+        try {
+            return CurrencyCast::fromCode($code);
+        } catch (InvalidArgumentException) {
+            throw RevolutApiException::unsupportedCurrency($code);
+        }
     }
 }
