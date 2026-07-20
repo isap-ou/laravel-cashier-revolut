@@ -9,11 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet._
 
-## [1.0.0] - 2026-07-20
+## [1.1.0] - 2026-07-20
 
-> The first release, **1.0.0**. The package was never published to a consumer, so
-> its pre-release history has been collapsed into this one entry rather than
-> carried as a version trail that describes tags nobody ever installed.
+> **Why 1.1.0 and not 1.0.0.** `1.0.0` was published to Packagist on 2026-07-01 and its tag
+> later deleted from git, so the repository looked untagged while Packagist still held the
+> version. Published versions there are immutable and deleting one does not free the number —
+> `isapp/laravel-cashier-support` proved that the hard way the same day. `1.1.0` is the first
+> number above anything ever published here. This is the first release of the driver as it
+> now stands.
+
+
+> The pre-release history is collapsed into this one entry rather than carried as a version
+> trail. Packagist reports 0 installs and 0 dependents for the 2026-07-01 version, so no
+> consumer is being deprived of a changelog they relied on.
 
 ### A subscription can no longer go live at Revolut without us knowing
 
@@ -574,5 +582,5 @@ will not pick up events added to the catalogue in a later release.
 - Subscription pause/resume remain unsupported, but swap no longer throws
   `UnsupportedOperationException`.
 
-[Unreleased]: https://github.com/isap-ou/laravel-cashier-revolut/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/isap-ou/laravel-cashier-revolut/releases/tag/v1.0.0
+[Unreleased]: https://github.com/isap-ou/laravel-cashier-revolut/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/isap-ou/laravel-cashier-revolut/releases/tag/v1.1.0
