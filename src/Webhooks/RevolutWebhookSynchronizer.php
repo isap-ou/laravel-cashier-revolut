@@ -51,6 +51,8 @@ use Throwable;
  * double-fire PaymentSucceeded/SubscriptionCanceled listeners. Deterministic
  * 404s from the refetch are acknowledged (logged, no retry storm); transient
  * failures bubble up as a 5xx so Revolut redelivers.
+ *
+ * @internal Applies a verified delivery to local state, behind Contracts\IncomingWebhook::pipeline(). An app listens to the support events it dispatches; it never calls this. Not public surface: outside the backward-compatibility promise in README.
  */
 class RevolutWebhookSynchronizer
 {

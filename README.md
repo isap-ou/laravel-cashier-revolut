@@ -148,20 +148,35 @@ is what it used to do, silently dropping the app's correlation data. Revolut's w
 correlation surface is a single string, and the driver exposes it as such:
 
 `externalReference()` is Revolut-specific, so it is not on the `SubscriptionBuilder`
-contract and `$user->newSubscription()` (which returns the support package's guarded
-builder) does not expose it. Reach the driver's builder through the provider:
+contract and `$user->newSubscription()` does not expose it — that returns support's
+`GuardedSubscriptionBuilder`, which is `final` and carries only the contract's setters.
+
+`Cashier::provider()` is **not** the way round it: it returns the guarded provider, whose
+`newSubscription()` hands back that same guarded builder. Ask for the driver itself:
 
 ```php
+use Isapp\CashierRevolut\Builders\RevolutSubscriptionBuilder;
+use Isapp\CashierRevolut\RevolutGateway;
 use Isapp\CashierSupport\Facades\Cashier;
 
-Cashier::provider()
-    ->newSubscription($user, 'default', $planVariationId)
-    ->externalReference('order_7')
-    ->create();
+/** @var RevolutGateway $revolut */
+$revolut = Cashier::driver('revolut');
+
+// newSubscription() is declared as returning the support CONTRACT, so narrow it —
+// otherwise static analysis reports externalReference() as undefined.
+/** @var RevolutSubscriptionBuilder $builder */
+$builder = $revolut->newSubscription($user, 'default', $planVariationId);
+
+$builder->externalReference('order_7')->create();
 
 // And read it back:
-Cashier::provider()->subscriptionExternalReference($user, 'default'); // 'order_7'
+$revolut->subscriptionExternalReference($user, 'default'); // 'order_7'
 ```
+
+`Cashier::driver()` is the raw, **unguarded** driver — the capability gate that
+`Cashier::provider()` applies is not in front of it. That is the trade: it is the only
+way to reach a driver-specific method, and in exchange you are responsible for asking
+`Cashier::supports()` yourself before calling anything the gateway may not do.
 
 `external_reference` is writable on create, returned on read, and the only field a
 subscription update accepts.
@@ -190,7 +205,7 @@ month. Deferral must be asked for:
 use Isapp\CashierRevolut\Enums\RevolutChangePlanReason;
 use Isapp\CashierSupport\Enums\SwapTiming;
 
-$user->swapSubscription('default', $newPlanVariationId, SwapTiming::AtPeriodEnd, [
+$user->subscription('default')->swap($newPlanVariationId, SwapTiming::AtPeriodEnd, options: [
     // Optional: which phase of the target variation to start from.
     'plan_variation_phase_id' => $phaseId,
     // Optional: informational only.
@@ -212,11 +227,11 @@ reaches the driver.
 
 ```php
 use Isapp\CashierSupport\DTO\CheckoutRequest;
-use Isapp\CashierSupport\Enums\Currency;
+use Money\Currency;
 
 $session = $user->checkout(CheckoutRequest::forAmount(
     amount: 1500,
-    currency: Currency::EUR,
+    currency: new Currency('EUR'),
     description: 'One coffee',
     successUrl: route('checkout.done'),
 ));
@@ -433,8 +448,9 @@ Cashier::extend('revolut', fn ($app) => $app->make(MyRevolutGateway::class));
 Or register the subclass side-by-side (`Cashier::extend('revolut-b2b', ...)`)
 and select it per model via `cashierDriver()`.
 
-**Swap the building blocks.** `RevolutConnector` and `RevolutWebhookHandler` are
-container singletons — decorate or replace them without touching the gateway.
+**Swap the building blocks.** `RevolutConnector`, `RevolutWebhookVerifier` and
+`RevolutGateway` are container singletons — decorate or replace any of them without
+touching the others.
 The `Http::revolut()` macro resolves the connector from the container, so a
 re-binding changes both the gateway and the macro:
 
@@ -452,6 +468,48 @@ composer test      # phpunit (Http::fake)
 composer analyse   # phpstan (larastan) level 8
 composer format    # laravel pint
 ```
+
+## Versioning and backward compatibility
+
+This package follows [Semantic Versioning](https://semver.org); see
+[CHANGELOG.md](CHANGELOG.md) and [RELEASING.md](RELEASING.md).
+
+"Public API" is narrower than "every `public` method in `src/`", and for a **driver** the
+difference matters more than usual: most of this package is a transcription of Revolut's
+wire format, and Revolut changes that on its own schedule. Freezing it would mean either
+lying about SemVer or cutting a major every time an API version lands.
+
+**Covered — a breaking change here requires a major release:**
+
+- `RevolutGateway` — what `Cashier::driver('revolut')` returns, including its
+  driver-specific methods (`subscriptionExternalReference()`).
+- `Builders\RevolutSubscriptionBuilder`'s own setters, `externalReference()` above all.
+- Every `Enums\*` case — `RevolutWebhookEvent` is the one to watch, since apps match on it.
+- `Models\*` — `RevolutSubscription`, `RevolutCustomer`, `RevolutInvoice`,
+  `RevolutSubscriptionItem`, and the tables they map to.
+- `Exceptions\RevolutApiException` and its `statusCode`.
+- `Checkout\RevolutCheckoutSession` — the `CheckoutSession` an app is handed.
+- `Http\RevolutConnector` and `Webhooks\RevolutWebhookVerifier` as **container bindings**,
+  since "Extending" above tells you to decorate them.
+- The published config keys.
+- And everything the support package covers, which this driver implements rather than
+  defines: see its README's "What SemVer covers here".
+
+**Not covered — marked `@internal` in code:**
+
+- `Http\Requests\*` and `Http\Responses\*` (20 classes). These *are* Revolut's request and
+  response shapes. A new `Revolut-Api-Version` may add, rename or drop a field here inside
+  a minor release; that is the point of keeping them out.
+- `Concerns\*` (9 traits). Composed into `RevolutGateway` — you reach their behaviour
+  through the gateway, never by naming the trait.
+- `Webhooks\RevolutWebhookSynchronizer` and `Webhooks\RevolutIncomingWebhook`. A delivery
+  reaches these through support's contract; an app listens to the support events they
+  dispatch. **What they dispatch is covered** — support defines those events — but when and
+  from which private method is not.
+
+**Release order is not optional:** this package requires
+`isapp/laravel-cashier-support: ^1.0`, so that package must be tagged and live on Packagist
+before this one is tagged. See [RELEASING.md](RELEASING.md).
 
 ## License
 

@@ -9,6 +9,8 @@ use Spatie\LaravelData\Mappers\SnakeCaseMapper;
 
 /**
  * Request body for POST /api/customers.
+ *
+ * @internal The shape of a Revolut request body, which is Revolut's to change and not ours to freeze. Reached only through RevolutGateway. Not public surface: outside the backward-compatibility promise in README.
  */
 #[MapOutputName(SnakeCaseMapper::class)]
 class CreateCustomerRequest extends RevolutRequest

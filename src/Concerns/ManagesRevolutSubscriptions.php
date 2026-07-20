@@ -38,6 +38,8 @@ use Isapp\CashierSupport\Facades\Cashier;
  * "supported" — the exact drift #28/#32 removed. Swapping a plan IS supported, but not through the
  * update endpoint (which only covers external_reference) — it is a separate command,
  * POST /subscriptions/{id}/change-plan, scheduled at cycle end and never prorated.
+ *
+ * @internal Composed into RevolutGateway, which is what Cashier::driver('revolut') returns — an app reaches this behaviour through the gateway, never by naming the trait. Not public surface: outside the backward-compatibility promise in README.
  */
 trait ManagesRevolutSubscriptions
 {

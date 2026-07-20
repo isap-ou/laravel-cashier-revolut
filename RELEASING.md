@@ -17,6 +17,19 @@ distributed via git tags (there is intentionally no `version` field in
 - [ ] The `isapp/laravel-cashier-support` constraint matches the support
       version this release actually needs (bump the `^` constraint when the
       driver starts using newer support APIs).
+- [ ] **A version satisfying that constraint is published on Packagist.** Not
+      "merged", not "tagged locally" — visible at
+      https://packagist.org/packages/isapp/laravel-cashier-support. Support is
+      released first, always; see its `RELEASING.md`.
+      ```bash
+      composer show isapp/laravel-cashier-support --all | head -3   # in a scratch project, not here
+      ```
+      **Nothing inside this repository can check this for you.** `composer.json`
+      resolves support through a `path` repository pinned to a hardcoded
+      `"versions": {"isapp/laravel-cashier-support": "1.0.0"}`, which satisfies
+      `^1.0` forever — in the monorepo and in this package's CI alike. That pin is
+      why the constraint sat unsatisfiable and unnoticed for months. Verify from a
+      throwaway project outside the monorepo or you have verified nothing.
 - [ ] The `[Unreleased]` section of `CHANGELOG.md` reflects every change since
       the last tag (the PR changelog enforcer keeps this honest).
 
@@ -63,10 +76,15 @@ git push origin vX.Y.Z
 
 - [ ] Create a GitHub Release from the tag, pasting the `X.Y.Z` CHANGELOG
       section as the body.
-- [ ] The repo is private: make sure the private package source (Private
-      Packagist / Satis / VCS entry in consuming apps) picks up the new tag.
-- [ ] `composer require isapp/laravel-cashier-revolut:^X.Y` resolves the
-      release in a consuming application.
+- [ ] Packagist updates automatically via the GitHub webhook; confirm the new
+      version appears at
+      https://packagist.org/packages/isapp/laravel-cashier-revolut (or click
+      **Update** on the package page).
+- [ ] `composer require isapp/laravel-cashier-revolut:^X.Y` resolves the release
+      in a scratch project **outside this monorepo**. Inside it, the `path`
+      repository resolves support locally and proves nothing about what a
+      consumer gets — this is the step that catches an unsatisfiable
+      `isapp/laravel-cashier-support` constraint, and the only one that can.
 
 ## Diffing versions
 

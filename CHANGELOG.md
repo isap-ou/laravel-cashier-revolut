@@ -11,6 +11,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > its pre-release history has been collapsed into this one entry rather than
 > carried as a version trail that describes tags nobody ever installed.
 
+### A public-API boundary, and four README snippets that could not run
+
+- **31 classes are now marked `@internal`, and README says what SemVer covers.** Without this a
+  1.0 tag freezes every `public` method in `src/` — and for a driver most of that is a
+  transcription of Revolut's wire format, which Revolut changes on its own schedule. Excluded:
+  `Http\Requests\*` and `Http\Responses\*` (20), `Concerns\*` (9 traits composed into
+  `RevolutGateway`), and `Webhooks\RevolutWebhookSynchronizer` / `RevolutIncomingWebhook`.
+  Covered: `RevolutGateway`, the builder's own setters, every `Enums\*` case, the `Models\*` and
+  their tables, `RevolutApiException`, `RevolutCheckoutSession`, the `RevolutConnector` and
+  `RevolutWebhookVerifier` container bindings (because "Extending" tells you to decorate them),
+  and the published config keys. The support package did this for its own surface; the driver had
+  not, which would have frozen the Revolut API's shape into our SemVer promise.
+
+- **Four README examples were wrong, three of them fatally.** Each is the shape of support#38 — a
+  document describing an API that does not exist:
+  - `use Isapp\CashierSupport\Enums\Currency;` with `Currency::EUR`. That enum was removed in
+    support#32; the field is a `Money\Currency`. The same README already wrote `new Currency('EUR')`
+    correctly forty lines earlier.
+  - `$user->swapSubscription('default', …)`. Not on `Billable` — support#39 moved swap onto the
+    model, `$user->subscription('default')->swap(…)`, which this README also showed correctly
+    elsewhere. The old call's fourth positional argument was `$options`, which is now `$proration`.
+  - `Cashier::provider()->newSubscription(…)->externalReference(…)` and
+    `Cashier::provider()->subscriptionExternalReference(…)`. Neither can work: `provider()` returns
+    support's `GuardedProvider`, which is `final`, has no `__call`, and hands back a `final`
+    `GuardedSubscriptionBuilder` carrying only the contract's setters. The route that does work is
+    `Cashier::driver('revolut')` — the raw driver — and the README now says so, along with the
+    trade: no capability gate in front of it, so ask `Cashier::supports()` yourself.
+  - `RevolutWebhookHandler` named as a container singleton. It has been `RevolutWebhookVerifier`
+    since the rename; the singletons are `RevolutConnector`, `RevolutWebhookVerifier` and
+    `RevolutGateway`.
+
+- **`RELEASING.md` no longer claims this repository is private** — it is public, with a live
+  Packagist webhook, so the step pointed the releaser at infrastructure that is not in play. It now
+  states that support must be **published** (not merely tagged) before this package is tagged, and
+  that neither check can be done from inside the monorepo: the `path` repository pins a fake
+  `1.0.0` that satisfies `^1.0` forever, here and in CI, which is exactly why the constraint sat
+  unsatisfiable and unnoticed.
+
 ### `WebhookHandled` now means the delivery had an effect, not "the event was recognised" (#35)
 
 - **`handle()` no longer assumes a matched event was applied.** It set `$applied = true` before

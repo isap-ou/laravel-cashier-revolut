@@ -14,6 +14,8 @@ use Isapp\CashierSupport\DTO\PaymentMethod;
  * RevolutGateway extends Gateway\BaseGateway, whose RefusesPaymentMethods default answers it with
  * a typed UnsupportedOperationException and reports PaymentMethodsAdd unsupported. A throwing stub
  * here would instead make BaseGateway read the method as "supported".
+ *
+ * @internal Composed into RevolutGateway, which is what Cashier::driver('revolut') returns — an app reaches this behaviour through the gateway, never by naming the trait. Not public surface: outside the backward-compatibility promise in README.
  */
 trait ManagesRevolutPaymentMethods
 {

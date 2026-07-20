@@ -17,6 +17,8 @@ use Isapp\CashierSupport\Exceptions\UnexpectedWebhookEventException;
  * documented types this driver does not map, so every one of them reached no listener.
  * The fix is no longer four lines in a controller this package could get wrong again; it
  * is pipeline() returning false.
+ *
+ * @internal One delivery, handed to support's WebhookController through Contracts\IncomingWebhook. Not public surface: outside the backward-compatibility promise in README.
  */
 class RevolutIncomingWebhook implements IncomingWebhook
 {

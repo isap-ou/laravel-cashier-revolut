@@ -32,6 +32,8 @@ use Isapp\CashierSupport\Exceptions\UnsupportedOperationException;
  * It does throw for a request Revolut itself would reject — a metadata pair that
  * breaks the API's restrictions — but as an InvalidArgumentException naming the
  * violation, the way the reference Cashier packages report a malformed argument.
+ *
+ * @internal Composed into RevolutGateway, which is what Cashier::driver('revolut') returns — an app reaches this behaviour through the gateway, never by naming the trait. Not public surface: outside the backward-compatibility promise in README.
  */
 trait HandlesRevolutCheckout
 {

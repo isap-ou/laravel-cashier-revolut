@@ -12,6 +12,8 @@ use Spatie\LaravelData\Mappers\SnakeCaseMapper;
  * Request body for POST /api/subscriptions/{subscription_id}/change-plan.
  *
  * @see https://developer.revolut.com/docs/api/merchant/operations/change-subscription-plan
+ *
+ * @internal The shape of a Revolut request body, which is Revolut's to change and not ours to freeze. Reached only through RevolutGateway. Not public surface: outside the backward-compatibility promise in README.
  */
 #[MapOutputName(SnakeCaseMapper::class)]
 class ChangeSubscriptionPlanRequest extends RevolutRequest

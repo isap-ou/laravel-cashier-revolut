@@ -16,6 +16,8 @@ use Isapp\CashierSupport\Contracts\IncomingWebhook;
  * delivery replaces them because verifying and applying need the same raw bytes, and a
  * per-delivery object takes them once instead of asking the caller to pass the same pair
  * twice and trusting it did.
+ *
+ * @internal Composed into RevolutGateway, which is what Cashier::driver('revolut') returns — an app reaches this behaviour through the gateway, never by naming the trait. Not public surface: outside the backward-compatibility promise in README.
  */
 trait HandlesRevolutWebhooks
 {
