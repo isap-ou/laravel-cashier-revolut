@@ -73,9 +73,12 @@ class RevolutWebhookSynchronizer
      * reads the body directly, which is honest: a Revolut-native key in a Revolut body.
      *
      * @param  array<string, mixed>  $body
-     * @return bool True when the event was applied; false when this driver does not apply
-     *              it, or applies it but the body names no resource to apply it to. Support's
-     *              controller dispatches WebhookHandled only for true.
+     * @return bool True when the delivery had an effect — a local row was written, or a payment
+     *              outcome was announced. False when this driver does not apply the event at
+     *              all, when the body names no resource to apply it to, or when it applies the
+     *              event but finds nothing to apply it to (#35): a refund order, an owner that
+     *              resolves to nobody, a subscription with no local record, a 404 on the
+     *              refetch. Support's controller dispatches WebhookHandled only for true.
      *
      * @throws RevolutApiException When the refetch fails for any reason but a 404.
      */
@@ -92,22 +95,29 @@ class RevolutWebhookSynchronizer
             return false;
         }
 
-        // The match below is THE map of what this driver applies — the enum is Revolut's
+        // The match below is THE map of what this driver CAN apply — the enum is Revolut's
         // catalogue and says nothing about our coverage, so this is the one place to read it.
-        // The flag is set in the default ARM rather than from a second list beside the match,
-        // because a second list is one that can drift from it.
-        $applied = true;
+        // Every arm assigns the flag, including `default`, rather than a second list beside the
+        // match: a second list is one that can drift from it.
+        //
+        // But matching an arm is only half the answer, and reading it as the whole one was #35:
+        // a mapped event can still find nothing to apply itself to — an order that is a refund,
+        // an owner that resolves to nobody, a subscription this app has no record of. Each of
+        // those returned early having done nothing, while `true` was latched before the match, so
+        // WebhookHandled announced an effect that never happened to apps that reconcile on it.
+        // The sync methods answer for themselves now, which is why nothing is latched here.
+        $applied = false;
 
         try {
             match ($event) {
                 RevolutWebhookEvent::SubscriptionInitiated,
                 RevolutWebhookEvent::SubscriptionFinished,
                 RevolutWebhookEvent::SubscriptionCancelled,
-                RevolutWebhookEvent::SubscriptionOverdue => $this->syncSubscription($event, $id),
+                RevolutWebhookEvent::SubscriptionOverdue => $applied = $this->syncSubscription($event, $id),
                 RevolutWebhookEvent::OrderCompleted,
                 RevolutWebhookEvent::OrderPaymentDeclined,
                 RevolutWebhookEvent::OrderPaymentFailed,
-                RevolutWebhookEvent::OrderFailed => $this->syncOrder($event, $id),
+                RevolutWebhookEvent::OrderFailed => $applied = $this->syncOrder($event, $id),
                 // The 14 we deliver but do not apply — every DISPUTE_* and PAYOUT_* among them.
                 // Never throw, the rule that replaced the ordering: they already reached a
                 // listener, because support dispatched WebhookReceived above this call (#24's
@@ -168,8 +178,15 @@ class RevolutWebhookSynchronizer
 
     /**
      * Mirror the subscription's real state from the API onto the local record.
+     *
+     * @return bool True when local state was written. The one false path is a subscription
+     *              this app has no record of — everything past the refetch mirrors the row,
+     *              so an unchanged STATUS is still applied: the billing period, the plan
+     *              variation and any scheduled price change are written regardless of whether
+     *              a typed event follows. "Did a domain event fire?" is a different question
+     *              from the one WebhookHandled asks (#35).
      */
-    private function syncSubscription(RevolutWebhookEvent $event, string $subscriptionId): void
+    private function syncSubscription(RevolutWebhookEvent $event, string $subscriptionId): bool
     {
         $model = Cashier::subscriptionModel(RevolutGateway::DRIVER);
 
@@ -187,7 +204,7 @@ class RevolutWebhookSynchronizer
                 'event' => $event->value,
             ]);
 
-            return;
+            return false;
         }
 
         $response = SubscriptionResponse::from(
@@ -230,7 +247,10 @@ class RevolutWebhookSynchronizer
         $owner = $record->owner()->first();
 
         if (! $owner instanceof Model || $previousStatus === $status) {
-            return;
+            // Applied, despite dispatching nothing: the record was mirrored above. Returning
+            // false here was the tempting over-correction on #35 — it would report "nothing
+            // changed" for a delivery that had just rewritten the billing period.
+            return true;
         }
 
         // Carry the grace period just written to the record: the Revolut
@@ -257,6 +277,8 @@ class RevolutWebhookSynchronizer
             // event — dunning and suspension deserve a signal of their own.
             default => new SubscriptionPastDue($owner, $subscription),
         });
+
+        return true;
     }
 
     /**
@@ -437,15 +459,20 @@ class RevolutWebhookSynchronizer
     /**
      * Persist a completed payment order as a local invoice record and
      * dispatch the typed payment event exactly once per order.
+     *
+     * @return bool True when the order was booked or a payment outcome was announced. False
+     *              for the two orders this driver recognises and deliberately does nothing
+     *              with: one that is not a payment at all (a refund or chargeback), and one
+     *              whose customer maps to no local billable (#35).
      */
-    private function syncOrder(RevolutWebhookEvent $event, string $orderId): void
+    private function syncOrder(RevolutWebhookEvent $event, string $orderId): bool
     {
         $json = $this->request()->get("/orders/{$orderId}")->json();
         $order = OrderResponse::from($json ?? []);
 
         // Refunds and chargebacks are orders too — never book them as payments.
         if (! $order->isPaymentOrder()) {
-            return;
+            return false;
         }
 
         $owner = $this->resolveOwner($order->customerId ?? $this->customerIdFromRaw($json));
@@ -456,7 +483,7 @@ class RevolutWebhookSynchronizer
                 'event' => $event->value,
             ]);
 
-            return;
+            return false;
         }
 
         $payment = $order->toPayment();
@@ -503,7 +530,7 @@ class RevolutWebhookSynchronizer
                 $this->syncRenewal($owner, $order->subscriptionData, $invoice);
             }
 
-            return;
+            return true;
         }
 
         // A failure event whose refetch shows the order completed was handled
@@ -517,6 +544,10 @@ class RevolutWebhookSynchronizer
             status: PaymentStatus::Failed,
             createdAt: $payment->createdAt,
         )));
+
+        // Applied: no row was written, but the decline was announced to a resolved owner, and
+        // that announcement is the outcome an app reconciles against.
+        return true;
     }
 
     /**

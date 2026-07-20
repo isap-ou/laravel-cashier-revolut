@@ -354,6 +354,25 @@ Event::listen(function (WebhookReceived $event) {
 });
 ```
 
+**`WebhookHandled` means the delivery had an effect — not that the event was recognised.**
+An effect is a local row written *or* a payment outcome announced. Being one of the 8 we
+apply is necessary, not sufficient: a mapped event can still find nothing to apply itself
+to, and then it is as silent as the other 14. Four deliveries do that:
+
+- an `ORDER_COMPLETED` whose refetched order is a refund or chargeback, not a payment;
+- an order whose Revolut customer maps to no local billable;
+- a `SUBSCRIPTION_*` for a subscription this app has no record of (created outside it);
+- a `404` on the refetch — the resource is gone.
+
+Two boundaries are worth knowing, because both are narrower than "a typed event fired":
+
+- A subscription event landing on the **same status** still counts as handled. No typed
+  event follows it, but the record was mirrored from the API first — billing period, plan
+  variation and any scheduled price change are written either way.
+- A **declined** payment counts as handled even though it writes no row: `PaymentFailed`
+  was dispatched against a resolved owner, and that announcement is the outcome. This is
+  why the rule is "had an effect" and not "wrote to the database".
+
 The payload is Revolut-shaped on purpose: an event nobody mapped has no
 provider-neutral meaning to render, and inventing one would be a lie. Use the typed
 events for meaning, this one for reach.

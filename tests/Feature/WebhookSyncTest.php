@@ -75,10 +75,24 @@ class WebhookSyncTest extends TestCase
     public function test_an_applied_event_says_so(): void
     {
         // The true arm, asserted rather than assumed: it is what support dispatches
-        // WebhookHandled on, and the other three tests here only pin false.
-        RevolutApi::fake();
+        // WebhookHandled on, and the other tests here only pin false.
+        //
+        // This used to fake nothing but the default order — which is `pending` and carries no
+        // customer, so the sync resolved no owner and booked nothing, and the assertion below
+        // passed anyway. That was #35 exactly: handle() latched true for anything the match
+        // recognised, so the test could not tell "applied" from "recognised" and was pinning
+        // the bug. An applied event now has to actually apply something.
+        RevolutApi::fake([
+            '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order([
+                'state' => 'completed',
+                'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+            ])),
+        ]);
+
+        User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
         $this->assertTrue($this->synchronizer()->handle($this->payload('ORDER_COMPLETED')));
+        $this->assertDatabaseCount('cashier_invoices', 1);
     }
 
     public function test_a_dashboard_cancellation_updates_the_local_subscription(): void
@@ -573,7 +587,10 @@ class WebhookSyncTest extends TestCase
             '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order(['state' => 'completed'])),
         ]);
 
-        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
+        // #35: the return value is the whole point, not a detail of this test. Nothing was
+        // written, so WebhookHandled must not fire — it used to, because handle() assumed
+        // true for anything the match arm recognised.
+        $this->assertFalse($this->synchronizer()->handle($this->payload('ORDER_COMPLETED')));
 
         $this->assertDatabaseCount('cashier_invoices', 0);
     }
@@ -621,10 +638,56 @@ class WebhookSyncTest extends TestCase
 
         User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
-        $this->synchronizer()->handle($this->payload('ORDER_COMPLETED'));
+        // #35: a refund order is a real ORDER_COMPLETED that this driver deliberately books
+        // nothing for. "Recognised" is not "applied".
+        $this->assertFalse($this->synchronizer()->handle($this->payload('ORDER_COMPLETED')));
 
         $this->assertDatabaseCount('cashier_invoices', 0);
         Event::assertNotDispatched(PaymentSucceeded::class);
+    }
+
+    public function test_a_subscription_event_for_an_unknown_local_record_is_not_applied(): void
+    {
+        // The last of the three paths #35 names. The subscription exists at Revolut but not
+        // here (created outside this app), so the synchronizer returns before the refetch and
+        // writes nothing at all — WebhookHandled would be announcing a change that never
+        // happened. WebhookReceived still fired: support dispatches it above this call, which
+        // is what makes an out-of-band subscription observable at all.
+        RevolutApi::fake();
+
+        $this->assertFalse($this->synchronizer()->handle($this->payload('SUBSCRIPTION_CANCELLED')));
+
+        $this->assertDatabaseCount('cashier_subscriptions', 0);
+    }
+
+    public function test_an_unchanged_status_still_counts_as_applied(): void
+    {
+        // The boundary this fix must NOT overshoot, pinned so a later reading of "applied"
+        // cannot quietly move it. Reaching the same status dispatches no typed event — but
+        // the record was still mirrored from the API before that point: the billing period,
+        // the plan variation and any scheduled price change are all written above the
+        // unchanged-status return. Local state changed, so the answer is true.
+        //
+        // "Did a domain event fire?" and "did local state change?" are different questions,
+        // and WebhookHandled asks the second one.
+        RevolutApi::fake([
+            '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(RevolutApi::subscription([
+                'state' => 'active',
+            ])),
+        ]);
+
+        $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
+
+        RevolutSubscription::query()->create([
+            'owner_type' => $user->getMorphClass(),
+            'owner_id' => $user->getKey(),
+            'type' => 'default',
+            'provider' => 'revolut',
+            'provider_id' => RevolutApi::SUBSCRIPTION_ID,
+            'status' => SubscriptionStatus::Active,
+        ]);
+
+        $this->assertTrue($this->synchronizer()->handle($this->payload('SUBSCRIPTION_OVERDUE')));
     }
 
     public function test_a_redelivery_does_not_dispatch_payment_succeeded_twice(): void
