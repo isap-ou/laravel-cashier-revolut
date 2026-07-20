@@ -20,5 +20,11 @@
     </source>
     <php>
         <env name="APP_ENV" value="testing"/>
+        <!-- Testbench's SQLite runs with PRAGMA foreign_keys = 0 by default, so the foreign
+             keys on cashier_subscription_items and cashier_invoices would be declared and
+             never exercised — cascade, null-on-delete and orphan rejection all unverified,
+             on every engine. A tag freezes the schema; this makes the constraints something
+             the suite actually defends. -->
+        <env name="DB_FOREIGN_KEYS" value="true"/>
     </php>
 </phpunit>

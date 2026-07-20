@@ -49,6 +49,10 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
+          # cashier-support requires ext-intl (Cashier::formatAmount builds a NumberFormatter),
+          # and this package depends on it — so the platform requirement applies here too. It
+          # was passing only because the runner image happened to carry intl.
+          extensions: intl
           coverage: none
 
       - name: Constrain framework version
@@ -93,6 +97,7 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
+          extensions: intl
           coverage: none
 
       - name: Install dependencies

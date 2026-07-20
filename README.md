@@ -205,7 +205,11 @@ month. Deferral must be asked for:
 use Isapp\CashierRevolut\Enums\RevolutChangePlanReason;
 use Isapp\CashierSupport\Enums\SwapTiming;
 
-$user->subscription('default')->swap($newPlanVariationId, SwapTiming::AtPeriodEnd, options: [
+// subscription() returns null when there is none of that type, so narrow before acting —
+// otherwise static analysis reports a call on a possibly-null receiver.
+$subscription = $user->subscription('default');
+
+$subscription?->swap($newPlanVariationId, SwapTiming::AtPeriodEnd, options: [
     // Optional: which phase of the target variation to start from.
     'plan_variation_phase_id' => $phaseId,
     // Optional: informational only.

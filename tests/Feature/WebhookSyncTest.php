@@ -730,6 +730,79 @@ class WebhookSyncTest extends TestCase
         });
     }
 
+    public function test_one_declined_attempt_announces_one_failure_however_many_events_arrive(): void
+    {
+        // Revolut sends THREE events for a single declined attempt — ORDER_PAYMENT_DECLINED,
+        // ORDER_PAYMENT_FAILED and ORDER_FAILED — and all three map to syncOrder against the
+        // same order id. The success path has been deduplicated since it was written
+        // (updateOrCreate + wasRecentlyCreated); the failure path wrote nothing, kept no
+        // marker, and re-announced every time.
+        //
+        // An app whose listener emails the customer and counts toward suspension therefore
+        // sent three emails and suspended after one decline. The class docblock claims "typed
+        // events are only dispatched on an actual transition" — that was true of the success
+        // path only.
+        Event::fake([PaymentFailed::class]);
+        RevolutApi::fake([
+            '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order([
+                'state' => 'pending',
+                'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+            ])),
+        ]);
+
+        User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
+
+        foreach (['ORDER_PAYMENT_DECLINED', 'ORDER_PAYMENT_FAILED', 'ORDER_FAILED'] as $event) {
+            $this->synchronizer()->handle($this->payload($event));
+        }
+
+        Event::assertDispatchedTimes(PaymentFailed::class, 1);
+    }
+
+    public function test_an_order_that_fails_and_then_succeeds_announces_both(): void
+    {
+        // The trap the failure-dedup walked straight into. The marker row is keyed on the ORDER
+        // id, and an order id is not an attempt id — a declined order that is later paid (3DS
+        // re-auth, the customer retrying, Revolut retrying the cycle) hits the SAME key. Gating
+        // the success dispatch on `wasRecentlyCreated` then found the failure row, decided this
+        // was a redelivery, and never announced the payment.
+        //
+        // That is strictly worse than the triple-email bug it came from: a duplicate email is
+        // noise, an entitlement never granted on a successful payment is a paying customer
+        // locked out — and there is no redelivery to repair it, because the controller answered
+        // 200. So the guard is a TRANSITION of the payment outcome, not the novelty of a row.
+        Event::fake([PaymentFailed::class, PaymentSucceeded::class]);
+
+        // A sequence, not two fake() calls: Http::fake() APPENDS a stub rather than replacing
+        // one, so a second registration for the same URL never wins and the order would look
+        // declined forever — which is how this test first "passed" against the wrong thing.
+        RevolutApi::fake([
+            '*/orders/'.RevolutApi::ORDER_ID => Http::sequence()
+                ->push(RevolutApi::order([
+                    'state' => 'pending',
+                    'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+                ]))
+                ->push(RevolutApi::order([
+                    'state' => 'completed',
+                    'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+                ])),
+        ]);
+
+        User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
+
+        $this->synchronizer()->handle($this->payload('ORDER_PAYMENT_DECLINED'));
+
+        // ...and now the very same order is paid.
+        $this->assertTrue($this->synchronizer()->handle($this->payload('ORDER_COMPLETED')));
+
+        Event::assertDispatchedTimes(PaymentFailed::class, 1);
+        Event::assertDispatchedTimes(PaymentSucceeded::class, 1);
+
+        // One row, carrying the outcome that actually stands.
+        $this->assertDatabaseCount('cashier_invoices', 1);
+        $this->assertSame(PaymentStatus::Succeeded, RevolutInvoice::query()->firstOrFail()->status);
+    }
+
     public function test_a_missing_resource_is_acknowledged_instead_of_retrying_forever(): void
     {
         RevolutApi::fake([
