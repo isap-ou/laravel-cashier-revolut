@@ -8,6 +8,7 @@ use DateTimeInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use Isapp\CashierRevolut\Concerns\PersistsRevolutPlanVariation;
 use Isapp\CashierRevolut\Concerns\ResolvesIdempotencyKey;
@@ -25,6 +26,7 @@ use Isapp\CashierSupport\Facades\Cashier;
 use Isapp\CashierSupport\Gateway\ManagesCustomerRecords;
 use Spatie\LaravelData\Exceptions\CannotCastDate;
 use Spatie\LaravelData\Exceptions\CannotCreateData;
+use Throwable;
 use TypeError;
 
 /**
@@ -185,7 +187,27 @@ class RevolutSubscriptionBuilder implements SubscriptionBuilder
 
         $subscription = $response->toSubscription($this->type);
 
-        $this->persist($subscription, $response->planVariationId ?? $this->planVariationId);
+        // Past this line Revolut has accepted the subscription and the customer is on a
+        // billing schedule. The local write used to sit bare here, outside the try/catch above
+        // and outside any transaction — so a DB failure produced a QueryException reading
+        // "database error", which is exactly the wrong impression: it sounds like nothing
+        // happened, while the customer is being charged every cycle.
+        //
+        // Nothing repairs it afterwards, either. Every later SUBSCRIPTION_* webhook finds no
+        // local record, the synchronizer returns false, support's controller answers 200, and
+        // Revolut never redelivers. That is why this is wrapped rather than left to bubble.
+        //
+        // The transaction is the other half: persist() writes the subscription row and then
+        // its item row, and a failure between them left a subscription with no item — not a
+        // crash, but worse, because subscribedToPrice() then answers false forever for a
+        // subscription that is billing.
+        try {
+            DB::transaction(function () use ($subscription, $response): void {
+                $this->persist($subscription, $response->planVariationId ?? $this->planVariationId);
+            });
+        } catch (Throwable $exception) {
+            throw RevolutApiException::subscriptionCreatedButNotRecorded($subscription->id, $exception);
+        }
 
         // Announce it only if it is already live. Revolut creates a subscription
         // `pending`, with a setup order the customer still has to pay in the

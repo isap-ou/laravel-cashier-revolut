@@ -730,6 +730,35 @@ class WebhookSyncTest extends TestCase
         });
     }
 
+    public function test_one_declined_attempt_announces_one_failure_however_many_events_arrive(): void
+    {
+        // Revolut sends THREE events for a single declined attempt — ORDER_PAYMENT_DECLINED,
+        // ORDER_PAYMENT_FAILED and ORDER_FAILED — and all three map to syncOrder against the
+        // same order id. The success path has been deduplicated since it was written
+        // (updateOrCreate + wasRecentlyCreated); the failure path wrote nothing, kept no
+        // marker, and re-announced every time.
+        //
+        // An app whose listener emails the customer and counts toward suspension therefore
+        // sent three emails and suspended after one decline. The class docblock claims "typed
+        // events are only dispatched on an actual transition" — that was true of the success
+        // path only.
+        Event::fake([PaymentFailed::class]);
+        RevolutApi::fake([
+            '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order([
+                'state' => 'pending',
+                'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+            ])),
+        ]);
+
+        User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
+
+        foreach (['ORDER_PAYMENT_DECLINED', 'ORDER_PAYMENT_FAILED', 'ORDER_FAILED'] as $event) {
+            $this->synchronizer()->handle($this->payload($event));
+        }
+
+        Event::assertDispatchedTimes(PaymentFailed::class, 1);
+    }
+
     public function test_a_missing_resource_is_acknowledged_instead_of_retrying_forever(): void
     {
         RevolutApi::fake([

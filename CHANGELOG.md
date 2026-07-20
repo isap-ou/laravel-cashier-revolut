@@ -11,6 +11,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > its pre-release history has been collapsed into this one entry rather than
 > carried as a version trail that describes tags nobody ever installed.
 
+### A subscription can no longer go live at Revolut without us knowing
+
+- **`create()` wrapped only the API call.** The local write sat outside that try/catch and
+  outside any transaction, so a DB failure after a `201` left a subscription **live at Revolut,
+  billing the customer, with no local record** — while the app caught a bare `QueryException`
+  saying "database error", which reads like nothing happened.
+
+  Nothing repaired it afterwards, which is what made it a release blocker rather than a nuisance:
+  every later `SUBSCRIPTION_*` webhook found no local record, the synchronizer returned false,
+  support's controller answered 200, and Revolut never redelivered. The customer was charged
+  every cycle, indefinitely, and no log said so.
+
+  Revolut has no undo for `POST /subscriptions`, so this cannot be rolled back — it can only be
+  *reported*. The local writes now run in a transaction (a failure between the subscription row
+  and its item row used to leave a subscription with no item, which is worse than a crash:
+  `subscribedToPrice()` then answers false forever for a subscription that is billing), and any
+  failure surfaces as `RevolutApiException::subscriptionCreatedButNotRecorded()` — catchable as a
+  `CashierException`, naming the subscription id so the orphan is findable in the dashboard, and
+  carrying the original exception as `previous`.
+
+- **One declined attempt announces one `PaymentFailed`.** Revolut sends **three** events for a
+  single decline — `ORDER_PAYMENT_DECLINED`, `ORDER_PAYMENT_FAILED`, `ORDER_FAILED` — and all
+  three reach `syncOrder()` against the same order id. The success path has been deduplicated
+  since it was written (`updateOrCreate` + `wasRecentlyCreated`); the failure path wrote nothing,
+  kept no marker, and re-announced every time. An app whose listener emailed the customer and
+  counted toward suspension sent three emails and suspended after one decline.
+
+  A failed attempt is now recorded as an invoice row with `PaymentStatus::Failed`, keyed on the
+  same unique `(provider, provider_id)` index the success path uses — so the dedup is the same
+  mechanism rather than a second one that can drift from it. **Consequence worth knowing:**
+  support's `invoices()` does not filter by status, so declined attempts now appear in a
+  billable's invoice list. That is deliberate — a decline is part of a billing history and the
+  DTO carries the status to filter on — but it is a visible change if you render that list raw.
+  The redelivery now returns `false`, so `WebhookHandled` does not fire for it either.
+
+- **CI installs `ext-intl`.** This package depends on `cashier-support`, which requires it since
+  `Cashier::formatAmount()` builds a `NumberFormatter` — so the platform requirement reaches here
+  too. It was passing only because the runner image happened to carry intl.
+
+- **One more README snippet corrected.** `$user->subscription('default')->swap(…)` calls a method
+  on a nullable receiver; `subscription()` returns `?Subscription`. The previous round fixed
+  exactly this defect for the `externalReference()` example one section below and missed this one.
+
 ### A public-API boundary, and four README snippets that could not run
 
 - **31 classes are now marked `@internal`, and README says what SemVer covers.** Without this a

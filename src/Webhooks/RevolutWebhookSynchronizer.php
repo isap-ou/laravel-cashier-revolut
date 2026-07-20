@@ -539,6 +539,42 @@ class RevolutWebhookSynchronizer
         // above; here the attempt genuinely failed. The order state after a
         // declined attempt often remains "pending", which would be a
         // contradictory payload — dispatch an explicit Failed payment.
+        //
+        // **Recorded, and for one reason: Revolut sends THREE events for a single declined
+        // attempt** — ORDER_PAYMENT_DECLINED, ORDER_PAYMENT_FAILED and ORDER_FAILED — and all
+        // three land here against the same order id. The success path has been deduplicated
+        // since it was written; this one wrote nothing, kept no marker, and re-announced every
+        // time. An app whose listener emails the customer and counts toward suspension sent
+        // three emails and suspended after one decline.
+        //
+        // The row is the marker, keyed on the same unique (provider, provider_id) index the
+        // success path uses, so the dedup is the same mechanism rather than a second one that
+        // can drift. It is also honest on its own terms: a declined attempt IS part of a
+        // billing history, it carries PaymentStatus::Failed, and support's invoices() returns
+        // it with that status for an app to filter on.
+        $model = Cashier::invoiceModel(RevolutGateway::DRIVER);
+
+        $record = $model::query()->updateOrCreate(
+            ['provider' => RevolutGateway::DRIVER, 'provider_id' => $order->id],
+            [
+                'owner_type' => $owner->getMorphClass(),
+                'owner_id' => $owner->getKey(),
+                'amount' => $payment->amount,
+                'currency' => $payment->currency,
+                'status' => PaymentStatus::Failed,
+                'issued_at' => $payment->createdAt ?? now(),
+                'billing_reason' => $order->subscriptionData === null
+                    ? BillingReason::Manual
+                    : $order->subscriptionData->toBillingReason(),
+            ],
+        );
+
+        if (! $record->wasRecentlyCreated) {
+            // A redelivery, or one of the sibling events for the same decline. Already
+            // announced — and false, because this delivery changed nothing.
+            return false;
+        }
+
         event(new PaymentFailed($owner, new Payment(
             id: $payment->id,
             amount: $payment->amount,
@@ -547,8 +583,6 @@ class RevolutWebhookSynchronizer
             createdAt: $payment->createdAt,
         )));
 
-        // Applied: no row was written, but the decline was announced to a resolved owner, and
-        // that announcement is the outcome an app reconciles against.
         return true;
     }
 
