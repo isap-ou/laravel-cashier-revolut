@@ -6,6 +6,17 @@ distributed via git tags (there is intentionally no `version` field in
 
 ## 1. Pre-flight
 
+- [ ] **Ask Packagist what is already published — not git.** `git tag` and `gh release list`
+      describe the repository, not the registry, and the two disagree the moment a tag is
+      deleted: the published version stays, immutable and invisible from here.
+      ```bash
+      curl -s https://repo.packagist.org/p2/isapp/laravel-cashier-revolut.json \
+        | python3 -c "import sys,json; print([p['version'] for p in json.load(sys.stdin)['packages']['isapp/laravel-cashier-revolut']])"
+      ```
+      Also open the package page — a version whose tag was deleted shows as *"No longer found
+      in upstream repository"* and does **not** appear in that API output, yet the number is
+      still taken. The next version must be strictly above everything either source names.
+      A number that was ever published cannot be reused; deleting the version does not free it.
 - [ ] All intended changes are merged into `main`.
 - [ ] `main` is green in CI (tests matrix + quality job).
 - [ ] Locally on an up-to-date `main`, everything passes:
