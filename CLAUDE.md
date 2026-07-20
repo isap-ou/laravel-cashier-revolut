@@ -156,8 +156,18 @@ only the 8 we apply while `registerWebhook()` read its cases for the subscriptio
 `php artisan cashier:webhook revolut` subscribed the endpoint to 8 of 22 and the other 14 were
 never sent at all: the hatch was correctly sequenced above a body that never arrived. The enum is
 now the full catalogue, the subscribed set is `config('cashier-revolut.webhook.events')` and
-defaults to all of it, and what we *apply* is the `match` in `RevolutWebhookSynchronizer` and
+defaults to all of it, and what we *can* apply is the `match` in `RevolutWebhookSynchronizer` and
 nowhere else. **Those are two sets, not one** — re-merging them is the bug, in either direction.
+
+**And since #35 the match is the *candidate* set, not the applied one.** Matching an arm is
+necessary, not sufficient: `syncOrder()` and `syncSubscription()` return `bool` and each arm
+assigns from them, because a mapped event can still find nothing to apply itself to — a refund
+order, an owner resolving to nobody, a subscription with no local record. `handle()` used to latch
+`true` before the match, so `WebhookHandled` announced an effect that never happened. The rule it
+answers is "the delivery had an effect": a row was written, **or** a payment outcome was
+announced. Two edges are deliberate — an unchanged subscription status is `true` (the row was
+mirrored before the typed event was skipped), and a declined payment is `true` (nothing persisted,
+`PaymentFailed` dispatched).
 
 **It was a four-line reorder that this repo still could not do**, and that is the part worth
 keeping. `WebhookReceived` carried a typed `Support\DTO\WebhookPayload` whose `$event` was a

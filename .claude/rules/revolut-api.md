@@ -77,6 +77,18 @@ create, and usage records. `POST /orders` and `POST /orders/{id}/payments` accep
   - **Applied**: the `match` in `RevolutWebhookSynchronizer::handle()`, **8 of the 22**. The rest
     take `default`, `pipeline()` returns false, and `WebhookHandled` does not fire.
 
+  Matching an arm is necessary but **not sufficient** (#35). `handle()` used to latch `true`
+  before the match and only clear it in `default`, so `WebhookHandled` announced a change for
+  every recognised event — including ones that wrote nothing and returned early: a refund or
+  chargeback order (`isPaymentOrder()` false), an order whose customer resolves to no local
+  billable, and a `SUBSCRIPTION_*` for a subscription with no local record. `syncOrder()` and
+  `syncSubscription()` now return `bool` and those paths answer `false`.
+
+  The boundary not to overshoot: in `syncSubscription()`, an **unchanged status** is still
+  applied. It dispatches no typed event, but the row was mirrored above that point — period
+  dates, plan variation, pending price. `WebhookHandled` asks "did local state change?", which
+  is not "did a domain event fire?".
+
   The enum held only the applied 8 until 2026-07-20, and registration read its cases — so we
   subscribed to 8 of 22 and the other 14 never arrived, which made #24's escape hatch
   unreachable for exactly the events it was built for (every `DISPUTE_*` among them). The enum

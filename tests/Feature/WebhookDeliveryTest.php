@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Isapp\CashierRevolut\Tests\Feature;
 
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Testing\TestResponse;
 use Isapp\CashierRevolut\Enums\RevolutWebhookEvent;
 use Isapp\CashierRevolut\Tests\Fixtures\RevolutApi;
+use Isapp\CashierRevolut\Tests\Fixtures\User;
 use Isapp\CashierRevolut\Tests\TestCase;
 use Isapp\CashierSupport\Events\WebhookHandled;
 use Isapp\CashierSupport\Events\WebhookReceived;
@@ -32,7 +34,12 @@ class WebhookDeliveryTest extends TestCase
     public function test_a_valid_webhook_dispatches_the_support_events(): void
     {
         Event::fake([WebhookReceived::class, WebhookHandled::class]);
-        RevolutApi::fake();
+
+        // WebhookHandled is asserted below, so the delivery has to actually change local state
+        // — an order that completed, for a customer this app knows. Faking only the default
+        // order left it `pending` with no customer, which applies nothing; the assertion still
+        // passed because handle() claimed true for any recognised event (#35).
+        $this->applicableOrder();
 
         $response = $this->postSigned('{"event":"ORDER_COMPLETED","order_id":"'.RevolutApi::ORDER_ID.'"}');
 
@@ -44,6 +51,23 @@ class WebhookDeliveryTest extends TestCase
                 && $event->payload['order_id'] === RevolutApi::ORDER_ID;
         });
         Event::assertDispatched(WebhookHandled::class);
+    }
+
+    /**
+     * Fake an ORDER_COMPLETED that this driver can genuinely apply: a completed payment order
+     * whose customer resolves to a local billable. Anything less books no invoice, and since
+     * #35 that means WebhookHandled does not fire.
+     */
+    private function applicableOrder(): void
+    {
+        RevolutApi::fake([
+            '*/orders/'.RevolutApi::ORDER_ID => Http::response(RevolutApi::order([
+                'state' => 'completed',
+                'customer' => ['id' => RevolutApi::CUSTOMER_ID],
+            ])),
+        ]);
+
+        User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
     }
 
     public function test_an_event_we_do_not_apply_reaches_a_listener_without_claiming_it_was_handled(): void
@@ -296,7 +320,8 @@ class WebhookDeliveryTest extends TestCase
         Event::listen(WebhookHandled::class, function (WebhookHandled $event) use (&$seen): void {
             $seen['handled'] = $event->payload;
         });
-        RevolutApi::fake();
+        // Same reason as above: WebhookHandled only carries a payload if it fires at all.
+        $this->applicableOrder();
 
         $body = ['event' => 'ORDER_COMPLETED', 'order_id' => RevolutApi::ORDER_ID];
         $this->postSigned((string) json_encode($body))->assertOk();

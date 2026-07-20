@@ -31,6 +31,18 @@ The flow, and who owns each part:
 - **Applied** — the `match` in `RevolutWebhookSynchronizer::handle()`, 8 of the 22. Everything
   else takes `default => $applied = false`.
 
+Matching an arm is **necessary, not sufficient** (#35). A mapped event can still find nothing to
+apply itself to, and then it is as unhandled as the 14: a refund/chargeback order, an owner that
+resolves to nobody, a `SUBSCRIPTION_*` with no local record, a 404 on the refetch. `syncOrder()`
+and `syncSubscription()` return `bool` and each arm assigns from them — so the *candidate* set is
+the match, and the *applied* set is what those methods answer. Do not latch `true` before the
+match again; that was the bug.
+
+The rule they implement is "the delivery had an effect": a local row was written, **or** a payment
+outcome was announced. Two edges follow, and both are deliberate — an unchanged subscription
+status is `true` (the row was mirrored before the typed event was skipped), and a declined payment
+is `true` (nothing persisted, but `PaymentFailed` was dispatched).
+
 `Enums\RevolutWebhookEvent` is the **catalogue** — a fact about Revolut. It says nothing about our
 coverage, and must not grow an `isMapped()`. Conflating the two is what made the hatch unreachable.
 
@@ -39,9 +51,13 @@ coverage, and must not grow an `isMapped()`. Conflating the two is what made the
 To **deliver** one Revolut adds: add the case to the enum. It is then subscribed by default and
 reaches `WebhookReceived` listeners, with no further work.
 
-To **apply** one: add an arm to the synchronizer's match and dispatch a support event
-(`Events\PaymentSucceeded`, `Events\SubscriptionCanceled`, …). Whether an event *deserves* a typed
-agnostic event is a support question first (#28) — support leads, drivers follow.
+To **apply** one: add an arm to the synchronizer's match that **assigns** from a sync method —
+`=> $applied = $this->syncX($event, $id)` — and make that method `return bool`, `true` only when
+the delivery had an effect and `false` on every path that returns early having done nothing. An
+arm that calls a `void` method drops the answer; one that assigns `true` outright re-creates #35.
+Dispatch the support event (`Events\PaymentSucceeded`, `Events\SubscriptionCanceled`, …) from
+inside the sync method. Whether an event *deserves* a typed agnostic event is a support question
+first (#28) — support leads, drivers follow.
 
 ## The one rule
 

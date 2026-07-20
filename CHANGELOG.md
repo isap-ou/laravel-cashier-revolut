@@ -11,6 +11,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > its pre-release history has been collapsed into this one entry rather than
 > carried as a version trail that describes tags nobody ever installed.
 
+### `WebhookHandled` now means the delivery had an effect, not "the event was recognised" (#35)
+
+- **`handle()` no longer assumes a matched event was applied.** It set `$applied = true` before
+  the `match` and cleared it only in the `default` arm, so any of the 8 events this driver maps
+  announced `Events\WebhookHandled` — even when it wrote nothing and returned early. Apps
+  reconcile on that event, and it was telling them a delivery had changed local state when it had
+  not. `syncOrder()` and `syncSubscription()` were `void`; they now return `bool` and answer for
+  themselves.
+
+- **Three deliveries flip from handled to not-handled**, all of them ones the driver recognises
+  and deliberately does nothing with: an `ORDER_COMPLETED` whose refetched order is a refund or
+  chargeback rather than a payment (`isPaymentOrder()` false); an order whose Revolut customer
+  resolves to no local billable; and a `SUBSCRIPTION_*` for a subscription with no local record,
+  e.g. one created outside this app. The pre-existing 404 branch already returned `false` and
+  reasoned this way in a comment — the sibling paths now agree with it instead of contradicting
+  it on the same screen. `WebhookReceived` is unaffected and still fires for every verified body.
+
+- **Two boundaries the fix deliberately does not cross.** An **unchanged subscription status**
+  is still `true`: it dispatches no typed event, but the record was mirrored from the API before
+  that point — billing period, plan variation and any scheduled price change are written
+  regardless, and returning `false` there was the tempting over-correction. A **declined
+  payment** is also still `true`, and it is the reason the rule is "had an effect" rather than
+  "wrote a row": nothing is persisted, but `PaymentFailed` was dispatched against a resolved
+  owner, and that announcement is the outcome an app reconciles against. The two halves of the
+  rule are exactly `syncOrder()`'s `@return`: *true when the order was booked **or** a payment
+  outcome was announced*. Note that a redelivery of an already-booked order is `true` as well —
+  `updateOrCreate` rewrites the same row and `wasRecentlyCreated` suppresses the duplicate
+  event, which is idempotency working, not an absence of effect.
+
+- **Three tests were pinning the old behaviour and are corrected, not relaxed.**
+  `test_an_applied_event_says_so` and two in `WebhookDeliveryTest` faked only the default order
+  — which is `pending` and carries no customer, so nothing was ever applied — and passed anyway
+  because `true` was latched regardless. They now set up an order that genuinely applies (state
+  `completed`, a customer resolving to a local billable) and assert the invoice row that follows.
+  That they could not distinguish "applied" from "recognised" is the defect restated. (#35)
+
 ### Webhooks: subscribe to the whole catalogue, apply eight
 
 - **`Enums\RevolutWebhookEvent` is now Revolut's full 22-event catalogue**, not the 8 the driver
