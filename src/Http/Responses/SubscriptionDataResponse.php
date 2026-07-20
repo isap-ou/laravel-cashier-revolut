@@ -18,13 +18,10 @@ use Spatie\LaravelData\Mappers\SnakeCaseMapper;
  * takes effect — Revolut has no dedicated webhook for it.
  *
  * @see https://developer.revolut.com/docs/api/merchant/operations/retrieve-order
- */
-#[MapInputName(SnakeCaseMapper::class)]
-/**
- * Revolut response payload: SubscriptionDataResponse.
  *
  * @internal The shape of a Revolut response, which is Revolut's to change and not ours to freeze — a new API version may add, rename or drop fields within a minor release. Reached only through RevolutGateway. Not public surface: outside the backward-compatibility promise in README.
  */
+#[MapInputName(SnakeCaseMapper::class)]
 class SubscriptionDataResponse extends Data
 {
     public const BILLING_REASON_CYCLE_BILLING = 'cycle_billing';

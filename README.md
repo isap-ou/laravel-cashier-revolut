@@ -155,15 +155,19 @@ contract and `$user->newSubscription()` does not expose it — that returns supp
 `newSubscription()` hands back that same guarded builder. Ask for the driver itself:
 
 ```php
+use Isapp\CashierRevolut\Builders\RevolutSubscriptionBuilder;
 use Isapp\CashierRevolut\RevolutGateway;
 use Isapp\CashierSupport\Facades\Cashier;
 
 /** @var RevolutGateway $revolut */
 $revolut = Cashier::driver('revolut');
 
-$revolut->newSubscription($user, 'default', $planVariationId)
-    ->externalReference('order_7')
-    ->create();
+// newSubscription() is declared as returning the support CONTRACT, so narrow it —
+// otherwise static analysis reports externalReference() as undefined.
+/** @var RevolutSubscriptionBuilder $builder */
+$builder = $revolut->newSubscription($user, 'default', $planVariationId);
+
+$builder->externalReference('order_7')->create();
 
 // And read it back:
 $revolut->subscriptionExternalReference($user, 'default'); // 'order_7'

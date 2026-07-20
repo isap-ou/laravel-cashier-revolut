@@ -24,13 +24,10 @@ use Spatie\LaravelData\Mappers\SnakeCaseMapper;
  *
  * Order states per OpenAPI merchant-2025-12-04:
  * pending | processing | authorised | completed | cancelled | failed.
- */
-#[MapInputName(SnakeCaseMapper::class)]
-/**
- * Revolut response payload: OrderResponse.
  *
  * @internal The shape of a Revolut response, which is Revolut's to change and not ours to freeze — a new API version may add, rename or drop fields within a minor release. Reached only through RevolutGateway. Not public surface: outside the backward-compatibility promise in README.
  */
+#[MapInputName(SnakeCaseMapper::class)]
 class OrderResponse extends Data
 {
     public function __construct(
