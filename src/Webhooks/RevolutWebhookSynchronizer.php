@@ -493,6 +493,13 @@ class RevolutWebhookSynchronizer
         if ($payment->status === PaymentStatus::Succeeded) {
             $model = Cashier::invoiceModel(RevolutGateway::DRIVER);
 
+            // Read the outcome we last recorded BEFORE overwriting it. `wasRecentlyCreated`
+            // alone is not the right guard once the failure path also writes this row: an
+            // order id is not an attempt id, so a declined order that is later paid updates
+            // the same key, and "not new" would have silently swallowed PaymentSucceeded for
+            // a payment that actually arrived. The question is whether the OUTCOME changed.
+            $previousStatus = $this->recordedStatus($model, $order->id);
+
             $invoice = $model::query()->updateOrCreate(
                 ['provider' => RevolutGateway::DRIVER, 'provider_id' => $order->id],
                 [
@@ -511,8 +518,9 @@ class RevolutWebhookSynchronizer
                 ],
             );
 
-            // Dispatch exactly once — redeliveries update the same record.
-            if ($invoice->wasRecentlyCreated) {
+            // Dispatch on a transition — a redelivery finds the same outcome and says nothing,
+            // while a genuine decline→success does announce.
+            if ($previousStatus !== $payment->status) {
                 event(new PaymentSucceeded($owner, $payment));
             }
 
@@ -554,7 +562,9 @@ class RevolutWebhookSynchronizer
         // it with that status for an app to filter on.
         $model = Cashier::invoiceModel(RevolutGateway::DRIVER);
 
-        $record = $model::query()->updateOrCreate(
+        $previousStatus = $this->recordedStatus($model, $order->id);
+
+        $model::query()->updateOrCreate(
             ['provider' => RevolutGateway::DRIVER, 'provider_id' => $order->id],
             [
                 'owner_type' => $owner->getMorphClass(),
@@ -569,9 +579,9 @@ class RevolutWebhookSynchronizer
             ],
         );
 
-        if (! $record->wasRecentlyCreated) {
-            // A redelivery, or one of the sibling events for the same decline. Already
-            // announced — and false, because this delivery changed nothing.
+        if ($previousStatus === PaymentStatus::Failed) {
+            // A redelivery, or one of the two sibling events Revolut sends for the same
+            // decline. Already announced — and false, because this delivery changed nothing.
             return false;
         }
 
@@ -584,6 +594,26 @@ class RevolutWebhookSynchronizer
         )));
 
         return true;
+    }
+
+    /**
+     * The payment outcome we last recorded for an order, or null if we recorded none.
+     *
+     * The dedup marker for BOTH the success and the failure path, because the two share a row:
+     * `(provider, provider_id)` is keyed on the order, and an order can be declined and then
+     * paid. Asking "is this row new?" conflates those — asking "did the outcome change?" does
+     * not, and it is also what an app reconciling on the typed events actually wants to know.
+     *
+     * @param  class-string<InvoiceRecord>  $model
+     */
+    private function recordedStatus(string $model, string $orderId): ?PaymentStatus
+    {
+        $record = $model::query()
+            ->where('provider', RevolutGateway::DRIVER)
+            ->where('provider_id', $orderId)
+            ->first();
+
+        return $record instanceof InvoiceRecord ? $record->status : null;
     }
 
     /**
