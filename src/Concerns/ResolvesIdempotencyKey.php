@@ -16,6 +16,8 @@ use InvalidArgumentException;
  * arrives with a fresh key, and Revolut charges or refunds the customer again.
  *
  * @see https://developer.revolut.com/docs/api/merchant/operations/refund-order.md
+ *
+ * @internal Composed into RevolutGateway, which is what Cashier::driver('revolut') returns — an app reaches this behaviour through the gateway, never by naming the trait. Not public surface: outside the backward-compatibility promise in README.
  */
 trait ResolvesIdempotencyKey
 {

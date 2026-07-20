@@ -20,6 +20,8 @@ use TypeError;
  *
  * Composed into RevolutGateway, which receives the connector via its
  * constructor.
+ *
+ * @internal Composed into RevolutGateway, which is what Cashier::driver('revolut') returns — an app reaches this behaviour through the gateway, never by naming the trait. Not public surface: outside the backward-compatibility promise in README.
  */
 trait InteractsWithRevolut
 {

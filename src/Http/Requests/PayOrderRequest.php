@@ -12,6 +12,11 @@ use Spatie\LaravelData\Mappers\SnakeCaseMapper;
  * charge against a saved payment method.
  */
 #[MapOutputName(SnakeCaseMapper::class)]
+/**
+ * Revolut request payload: PayOrderRequest.
+ *
+ * @internal The shape of a Revolut request body, which is Revolut's to change and not ours to freeze. Reached only through RevolutGateway. Not public surface: outside the backward-compatibility promise in README.
+ */
 class PayOrderRequest extends RevolutRequest
 {
     /**

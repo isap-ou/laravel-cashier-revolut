@@ -25,6 +25,8 @@ use Isapp\CashierSupport\Exceptions\PaymentFailedException;
  *
  * A charge creates an order and pays it with a saved payment method
  * (merchant-initiated). Refunds are issued against the order.
+ *
+ * @internal Composed into RevolutGateway, which is what Cashier::driver('revolut') returns — an app reaches this behaviour through the gateway, never by naming the trait. Not public surface: outside the backward-compatibility promise in README.
  */
 trait PerformsRevolutCharges
 {

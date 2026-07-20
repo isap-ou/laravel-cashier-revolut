@@ -12,6 +12,8 @@ namespace Isapp\CashierRevolut\Http\Requests;
  * which leaves the order (and the card used to pay it) attached to nobody.
  *
  * @see https://developer.revolut.com/docs/api/merchant/operations/create-order.md
+ *
+ * @internal The shape of a Revolut request body, which is Revolut's to change and not ours to freeze. Reached only through RevolutGateway. Not public surface: outside the backward-compatibility promise in README.
  */
 class OrderCustomerRequest extends RevolutRequest
 {

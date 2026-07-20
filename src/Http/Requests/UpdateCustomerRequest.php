@@ -15,6 +15,11 @@ use Spatie\LaravelData\Mappers\SnakeCaseMapper;
  * the gateway rather than cleared.
  */
 #[MapOutputName(SnakeCaseMapper::class)]
+/**
+ * Revolut request payload: UpdateCustomerRequest.
+ *
+ * @internal The shape of a Revolut request body, which is Revolut's to change and not ours to freeze. Reached only through RevolutGateway. Not public surface: outside the backward-compatibility promise in README.
+ */
 class UpdateCustomerRequest extends RevolutRequest
 {
     public function __construct(

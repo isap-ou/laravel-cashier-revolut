@@ -19,6 +19,11 @@ use Spatie\LaravelData\Mappers\SnakeCaseMapper;
  * @see https://developer.revolut.com/docs/api/merchant/operations/create-subscription
  */
 #[MapOutputName(SnakeCaseMapper::class)]
+/**
+ * Revolut request payload: CreateSubscriptionRequest.
+ *
+ * @internal The shape of a Revolut request body, which is Revolut's to change and not ours to freeze. Reached only through RevolutGateway. Not public surface: outside the backward-compatibility promise in README.
+ */
 class CreateSubscriptionRequest extends RevolutRequest
 {
     public function __construct(

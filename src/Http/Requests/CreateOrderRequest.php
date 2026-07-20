@@ -11,6 +11,11 @@ use Spatie\LaravelData\Mappers\SnakeCaseMapper;
  * Request body for POST /api/orders.
  */
 #[MapOutputName(SnakeCaseMapper::class)]
+/**
+ * Revolut request payload: CreateOrderRequest.
+ *
+ * @internal The shape of a Revolut request body, which is Revolut's to change and not ours to freeze. Reached only through RevolutGateway. Not public surface: outside the backward-compatibility promise in README.
+ */
 class CreateOrderRequest extends RevolutRequest
 {
     /**

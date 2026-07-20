@@ -21,6 +21,11 @@ use Spatie\LaravelData\Mappers\SnakeCaseMapper;
  * subscription's end is signalled by its state (cancelled/finished).
  */
 #[MapInputName(SnakeCaseMapper::class)]
+/**
+ * Revolut response payload: SubscriptionResponse.
+ *
+ * @internal The shape of a Revolut response, which is Revolut's to change and not ours to freeze — a new API version may add, rename or drop fields within a minor release. Reached only through RevolutGateway. Not public surface: outside the backward-compatibility promise in README.
+ */
 class SubscriptionResponse extends Data
 {
     public function __construct(

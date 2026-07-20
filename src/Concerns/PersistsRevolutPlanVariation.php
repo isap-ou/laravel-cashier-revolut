@@ -29,6 +29,8 @@ use Isapp\CashierSupport\Models\SubscriptionItem;
  * five-seat plan as one seat) or to write nothing, which left
  * subscribedToPrice() false forever for any subscription the builder had not
  * created.
+ *
+ * @internal Composed into RevolutGateway, which is what Cashier::driver('revolut') returns — an app reaches this behaviour through the gateway, never by naming the trait. Not public surface: outside the backward-compatibility promise in README.
  */
 trait PersistsRevolutPlanVariation
 {
