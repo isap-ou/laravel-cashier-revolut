@@ -5,13 +5,15 @@ declare(strict_types=1);
 namespace Isapp\CashierRevolut\Tests\Feature;
 
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Schema;
 use Isapp\CashierRevolut\Exceptions\RevolutApiException;
 use Isapp\CashierRevolut\RevolutGateway;
 use Isapp\CashierRevolut\Tests\Fixtures\RevolutApi;
+use Isapp\CashierRevolut\Tests\Fixtures\UnwritableSubscription;
+use Isapp\CashierRevolut\Tests\Fixtures\UnwritableSubscriptionItem;
 use Isapp\CashierRevolut\Tests\Fixtures\User;
 use Isapp\CashierRevolut\Tests\TestCase;
 use Isapp\CashierSupport\Exceptions\CashierException;
+use Isapp\CashierSupport\Facades\Cashier;
 
 /**
  * The window between "Revolut has a subscription" and "we know about it".
@@ -38,10 +40,11 @@ class SubscriptionPersistenceFailureTest extends TestCase
 
         $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
-        // The most faithful way to make the write fail for real, rather than mocking the model
-        // and proving only that a mock was called: take the table away after the API call has
-        // already been faked as successful.
-        Schema::drop('cashier_subscriptions');
+        // A real query against a table that does not exist — a genuine QueryException on the
+        // genuine path. Not Schema::drop(): that also passes, and then breaks Testbench's
+        // migration rollback in teardown on any support revision whose down() ALTERs rather
+        // than drops. And not a mock, which would prove only that a mock was called.
+        Cashier::useModels('revolut', ['subscription' => UnwritableSubscription::class]);
 
         try {
             app(RevolutGateway::class)
@@ -93,7 +96,7 @@ class SubscriptionPersistenceFailureTest extends TestCase
 
         $user = User::asRevolutCustomer(RevolutApi::CUSTOMER_ID);
 
-        Schema::drop('cashier_subscription_items');
+        Cashier::useModels('revolut', ['subscription_item' => UnwritableSubscriptionItem::class]);
 
         try {
             app(RevolutGateway::class)
