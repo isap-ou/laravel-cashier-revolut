@@ -32,6 +32,7 @@ trait ManagesRevolutCustomer
             fullName: $details->name,
             email: $details->email,
             phone: $this->phoneOption($details),
+            dateOfBirth: $this->dateOfBirthOption($details),
         );
 
         $customer = $this->guardConnection(fn (): Customer => CustomerResponse::from(
@@ -48,8 +49,8 @@ trait ManagesRevolutCustomer
      *
      * PATCH /api/customers/{id} with only the fields the caller named: RevolutRequest::payload()
      * omits nulls, so an unmentioned field is left untouched at the gateway — the contract's
-     * "null means leave it alone". phone rides in $details->options, the field that is Revolut's
-     * and not one of support's two typed ones.
+     * "null means leave it alone". phone and date_of_birth ride in $details->options, the fields
+     * that are Revolut's and not one of support's two typed ones.
      */
     public function updateCustomer(Model $billable, CustomerDetails $details): Customer
     {
@@ -60,6 +61,7 @@ trait ManagesRevolutCustomer
                 fullName: $details->name,
                 email: $details->email,
                 phone: $this->phoneOption($details),
+                dateOfBirth: $this->dateOfBirthOption($details),
             ))->payload())->json() ?? [],
         )->toCustomer());
 
@@ -87,5 +89,16 @@ trait ManagesRevolutCustomer
     private function phoneOption(CustomerDetails $details): ?string
     {
         return is_string($details->options['phone'] ?? null) ? $details->options['phone'] : null;
+    }
+
+    /**
+     * Revolut's date_of_birth (a documented optional customer field, sent as a plain YYYY-MM-DD
+     * string) rides in the same options escape hatch as phone — it is not one of support's two
+     * typed fields, and like phone it is request-side only: the neutral Customer DTO carries no
+     * slot for it, so it is written but does not round-trip back.
+     */
+    private function dateOfBirthOption(CustomerDetails $details): ?string
+    {
+        return is_string($details->options['date_of_birth'] ?? null) ? $details->options['date_of_birth'] : null;
     }
 }

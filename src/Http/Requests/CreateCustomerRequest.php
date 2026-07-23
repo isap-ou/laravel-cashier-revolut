@@ -19,5 +19,6 @@ class CreateCustomerRequest extends RevolutRequest
         public ?string $fullName = null,
         public ?string $email = null,
         public ?string $phone = null,
+        public ?string $dateOfBirth = null,
     ) {}
 }
