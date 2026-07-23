@@ -238,7 +238,12 @@ class RevolutGatewayTest extends TestCase
         $canceled = $this->gateway()->cancelSubscription($user, 'default');
 
         $this->assertSame('sub_1', $canceled->id);
-        Http::assertSent(fn ($request) => str_contains($request->url(), '/subscriptions/sub_1/cancel'));
+        // The cancel endpoint takes no body, but Revolut rejects an empty body under the
+        // application/json content-type with 400 "Could not parse JSON" (sandbox-verified), so the
+        // driver must send an explicit empty JSON object — not nothing.
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/subscriptions/sub_1/cancel')
+            && $request->method() === 'POST'
+            && $request->body() === '{}');
 
         // The customer paid through the active cycle's end — the local record
         // keeps a real grace period (not ends_at = now()), so subscribed()

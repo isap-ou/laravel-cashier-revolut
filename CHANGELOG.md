@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet._
 
+## [1.3.0] - 2026-07-24
+
+### Fixed
+
+- **`cancelSubscription()` failed against the live API with 400 "Could not parse JSON".** The cancel
+  request (`POST /subscriptions/{id}/cancel`) carries no body, but the connector sends
+  `Content-Type: application/json` on every request, and Revolut rejects an empty body under that
+  header. The driver now sends an explicit empty JSON object (`{}`). Found by the new live sandbox
+  suite; the offline `Http::fake` stub returned 204 regardless of the body, so it never surfaced.
+
+### Added
+
+- **Customer `date_of_birth`.** The driver now sends the documented optional `date_of_birth` field
+  on `POST`/`PATCH /api/customers`, carried through the `CustomerDetails` options escape hatch
+  (`['date_of_birth' => 'YYYY-MM-DD']`) exactly as `phone` is — request-side only, no change to the
+  neutral `Customer` DTO or the support package. Omitted from the request when not supplied (or not a
+  string), per the null-omit contract.
+- **Live sandbox test layer (`composer test:sandbox`).** A new `tests/Sandbox` suite that exercises
+  real user workflows against `sandbox-merchant.revolut.com` through the actual gateway, complementing
+  the offline `Http::fake` suite. It is not part of `composer test` and self-skips unless
+  `REVOLUT_SECRET_KEY` and a truthy `REVOLUT_SANDBOX` are set, so CI stays green. First workflow: the
+  customer lifecycle (create/retrieve/update), which also pins that the Merchant API customer object
+  has no individual/business concept in api-version 2026-04-20 (`business_name` unsupported, no
+  `type` field).
+- **Local-only Playwright e2e tier (`e2e/`).** Browser-driven tests for the flows that require the
+  Checkout Widget and so cannot run server-to-server — first spec completes a real sandbox card
+  payment on the hosted checkout (€15, below the 3DS threshold, with a documented sandbox card) and
+  confirms the order reaches a paid state via the API. **Not wired into CI** and not run by
+  `composer test`; run manually with credentials — see `e2e/README.md`.
+
 ## [1.2.1] - 2026-07-23
 
 ### Fixed
@@ -616,7 +646,8 @@ will not pick up events added to the catalogue in a later release.
 - Subscription pause/resume remain unsupported, but swap no longer throws
   `UnsupportedOperationException`.
 
-[Unreleased]: https://github.com/isap-ou/laravel-cashier-revolut/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/isap-ou/laravel-cashier-revolut/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/isap-ou/laravel-cashier-revolut/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/isap-ou/laravel-cashier-revolut/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/isap-ou/laravel-cashier-revolut/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/isap-ou/laravel-cashier-revolut/releases/tag/v1.1.0
