@@ -37,11 +37,14 @@ final class GatewayConformanceTest extends BaseConformanceTestCase
         parent::setUp();
 
         // A GET by subscription id is not in RevolutApi::fake()'s default map (it only covers
-        // the /cancel, /change-plan and /cycles sub-resources), and cancelSubscription() and the
-        // at-period-end swap both refetch it.
+        // the /cancel, /change-plan and /cycles sub-resources), and cancelSubscription(), the
+        // at-period-end swap and subscriptionLatestPayment() all refetch it. setup_order_id is
+        // nulled: an active subscription's setup order is already paid, so subscriptionLatestPayment()
+        // returns null rather than fetching a setup order the fake has no /orders/{id} route for.
         RevolutApi::fake([
             '*/subscriptions/'.RevolutApi::SUBSCRIPTION_ID => Http::response(RevolutApi::subscription([
                 'state' => 'active',
+                'setup_order_id' => null,
             ])),
         ]);
     }

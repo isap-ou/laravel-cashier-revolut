@@ -107,11 +107,28 @@ trait PerformsRevolutCharges
     }
 
     /**
+     * A single order resource, by id — an internal `GET /orders/{id}` helper.
+     *
+     * Shared across the traits flattened into RevolutGateway: {@see settledPayment()} reads a
+     * charge's order here, and ManagesRevolutSubscriptions::subscriptionLatestPayment() reads a
+     * subscription's setup order (whose `token` the Checkout Widget consumes). Not public gateway
+     * surface — the neutral payment it feeds is what leaves the driver, never this raw resource.
+     */
+    protected function retrieveOrder(string $orderId): OrderResponse
+    {
+        return $this->guardConnection(
+            fn (): OrderResponse => OrderResponse::from(
+                $this->revolut()->get("/orders/{$orderId}")->json() ?? [],
+            ),
+        );
+    }
+
+    /**
      * The order's payment, refetched, with a declined one raised as a failure.
      */
     private function settledPayment(string $orderId): Payment
     {
-        $payment = OrderResponse::from($this->revolut()->get("/orders/{$orderId}")->json() ?? [])->toPayment();
+        $payment = $this->retrieveOrder($orderId)->toPayment();
 
         if ($payment->status === PaymentStatus::Failed) {
             throw PaymentFailedException::forPayment($payment->id);

@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **`subscriptionLatestPayment()` — complete a subscription created `pending`.** Implements the
+  support contract (support#83): reads the subscription, then its setup order, and returns the
+  neutral `DTO\Payment` whose `clientSecret` is the Checkout Widget `token` (via
+  `OrderResponse::toSetupPayment()`, reporting `RequiresPaymentMethod`). Absence answers null (no
+  local subscription, or the setup order already paid). `Capability::SubscriptionLatestPayment` is
+  auto-derived from the override.
+
+### Changed
+
+- Replaced the earlier setup-order read (`subscriptionSetupOrder()` / public `retrieveOrder()`
+  returning the `@internal` `OrderResponse`) with the contract-backed `subscriptionLatestPayment()`
+  above; `retrieveOrder()` is now a `protected` internal `GET /orders/{id}` helper, off the public
+  gateway surface. The widget token reaches an app only through the neutral `Payment`, never a raw
+  driver response.
+- Bumped the `isapp/laravel-cashier-support` requirement to `^1.3` — `subscriptionLatestPayment()`
+  is a 1.3.0 contract, so an older support cannot satisfy the driver.
 
 ## [1.1.0] - 2026-07-20
 

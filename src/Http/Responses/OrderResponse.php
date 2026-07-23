@@ -103,4 +103,27 @@ class OrderResponse extends Data
             createdAt: $this->createdAt,
         );
     }
+
+    /**
+     * This order seen as a subscription's outstanding setup payment.
+     *
+     * A subscription is created `pending` with a setup order the customer still has to pay in the
+     * Checkout Widget; the widget consumes this order's `token`. So the neutral Payment carries
+     * that token as its `clientSecret` and reports RequiresPaymentMethod — the customer has not
+     * provided payment yet — rather than the raw `pending` state, which no requires*() predicate
+     * reads. This mirrors charge()'s SCA branch, which likewise pairs the order `token` with a
+     * requires_* status instead of the order state, and Cashier's incomplete-subscription payment,
+     * which reports a requires_* status an app can branch on.
+     */
+    public function toSetupPayment(): Payment
+    {
+        return new Payment(
+            id: $this->id,
+            amount: $this->amount,
+            currency: $this->currencyEnum(),
+            status: PaymentStatus::RequiresPaymentMethod,
+            clientSecret: $this->token,
+            createdAt: $this->createdAt,
+        );
+    }
 }
