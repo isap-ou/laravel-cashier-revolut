@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [1.2.1] - 2026-07-23
+
 ### Fixed
 
 - **`subscriptionLatestPayment()` returned `null` for every pending subscription (Checkout Widget
@@ -612,6 +616,7 @@ will not pick up events added to the catalogue in a later release.
 - Subscription pause/resume remain unsupported, but swap no longer throws
   `UnsupportedOperationException`.
 
-[Unreleased]: https://github.com/isap-ou/laravel-cashier-revolut/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/isap-ou/laravel-cashier-revolut/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/isap-ou/laravel-cashier-revolut/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/isap-ou/laravel-cashier-revolut/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/isap-ou/laravel-cashier-revolut/releases/tag/v1.1.0
