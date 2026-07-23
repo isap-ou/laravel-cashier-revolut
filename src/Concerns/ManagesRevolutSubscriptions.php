@@ -16,6 +16,7 @@ use Isapp\CashierRevolut\Http\Responses\SubscriptionResponse;
 use Isapp\CashierRevolut\Models\RevolutSubscription;
 use Isapp\CashierRevolut\RevolutGateway;
 use Isapp\CashierSupport\Contracts\SubscriptionBuilder;
+use Isapp\CashierSupport\DTO\Payment;
 use Isapp\CashierSupport\DTO\Subscription;
 use Isapp\CashierSupport\Enums\Proration;
 use Isapp\CashierSupport\Enums\SubscriptionStatus;
@@ -327,6 +328,38 @@ trait ManagesRevolutSubscriptions
     }
 
     /**
+     * The latest payment on a subscription, or null — its outstanding setup order as a Payment.
+     *
+     * A new Revolut subscription comes back `pending` with a setup order the customer pays in the
+     * Checkout Widget ({@see RevolutSubscriptionBuilder::create()}). The subscription resource names
+     * that order's id; the order carries the widget `token`. This reads the subscription, then the
+     * order, and returns the neutral Payment whose `clientSecret` is that token (see
+     * OrderResponse::toSetupPayment()) — what an app hands the widget to complete a pending
+     * subscription. Null when there is no such local subscription, nothing is outstanding (the setup
+     * order has been paid), or the plan has no setup order (a pure trial): a read answers absence
+     * with null, never a throw — as Cashier's latestPayment() and support's findInvoice() both do.
+     */
+    public function subscriptionLatestPayment(Model $billable, string $type = 'default'): ?Payment
+    {
+        $record = $this->subscriptionRecordOrNull($billable, $type);
+        $id = $record !== null ? $this->stringAttribute($record, 'provider_id') : null;
+
+        if ($id === null || $id === '') {
+            return null;
+        }
+
+        return $this->guardConnection(function () use ($id): ?Payment {
+            $setupOrderId = SubscriptionResponse::from(
+                $this->revolut()->get("/subscriptions/{$id}")->json() ?? [],
+            )->setupOrderId;
+
+            return $setupOrderId !== null
+                ? $this->retrieveOrder($setupOrderId)->toSetupPayment()
+                : null;
+        });
+    }
+
+    /**
      * Cancel (204 No Content) then refetch the subscription for its state.
      *
      * $endsAt is passed through because Revolut's subscription resource has no
@@ -501,21 +534,27 @@ trait ManagesRevolutSubscriptions
 
     private function subscriptionRecord(Model $billable, string $type): RevolutSubscription
     {
+        return $this->subscriptionRecordOrNull($billable, $type)
+            ?? throw new SubscriptionUpdateFailure("No [{$type}] subscription found for the billable entity.");
+    }
+
+    /**
+     * The local subscription record, or null when there is none.
+     *
+     * subscriptionRecord() throws for the mutations that cannot proceed without a row;
+     * subscriptionLatestPayment() is a read and answers absence with null instead.
+     */
+    private function subscriptionRecordOrNull(Model $billable, string $type): ?RevolutSubscription
+    {
         $model = Cashier::subscriptionModel(RevolutGateway::DRIVER);
 
-        /** @var RevolutSubscription|null $record */
-        $record = $model::query()
+        /** @var RevolutSubscription|null */
+        return $model::query()
             ->where('provider', RevolutGateway::DRIVER)
             ->where('owner_type', $billable->getMorphClass())
             ->where('owner_id', $billable->getKey())
             ->where('type', $type)
             ->latest()
             ->first();
-
-        if ($record === null) {
-            throw new SubscriptionUpdateFailure("No [{$type}] subscription found for the billable entity.");
-        }
-
-        return $record;
     }
 }

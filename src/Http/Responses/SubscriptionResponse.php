@@ -31,6 +31,11 @@ class SubscriptionResponse extends Data
         public ?string $currentCycleId = null,
         public ?string $planVariationId = null,
         public ?string $externalReference = null,
+        // The setup order Revolut opens alongside a freshly created subscription:
+        // the customer pays it in the Checkout Widget to activate the
+        // subscription. Present until it is paid; absent once it has been (or on
+        // a plan with no setup order, e.g. a pure trial).
+        public ?string $setupOrderId = null,
         #[WithCast(DateTimeInterfaceCast::class, format: RevolutDateFormats::FORMATS)]
         public ?CarbonImmutable $trialEndDate = null,
         #[WithCast(DateTimeInterfaceCast::class, format: RevolutDateFormats::FORMATS)]
