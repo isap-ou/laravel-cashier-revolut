@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use Isapp\CashierRevolut\Builders\RevolutSubscriptionBuilder;
 use Isapp\CashierRevolut\Enums\RevolutChangePlanReason;
+use Isapp\CashierRevolut\Enums\RevolutSubscriptionState;
 use Isapp\CashierRevolut\Http\Requests\ChangeSubscriptionPlanRequest;
 use Isapp\CashierRevolut\Http\Responses\CycleResponse;
 use Isapp\CashierRevolut\Http\Responses\SubscriptionResponse;
@@ -331,13 +332,25 @@ trait ManagesRevolutSubscriptions
      * The latest payment on a subscription, or null — its outstanding setup order as a Payment.
      *
      * A new Revolut subscription comes back `pending` with a setup order the customer pays in the
-     * Checkout Widget ({@see RevolutSubscriptionBuilder::create()}). The subscription resource names
-     * that order's id; the order carries the widget `token`. This reads the subscription, then the
-     * order, and returns the neutral Payment whose `clientSecret` is that token (see
-     * OrderResponse::toSetupPayment()) — what an app hands the widget to complete a pending
-     * subscription. Null when there is no such local subscription, nothing is outstanding (the setup
-     * order has been paid), or the plan has no setup order (a pure trial): a read answers absence
-     * with null, never a throw — as Cashier's latestPayment() and support's findInvoice() both do.
+     * Checkout Widget ({@see RevolutSubscriptionBuilder::create()}); the order carries the widget
+     * `token`. The `POST /subscriptions` response names the setup order, but the retrieve response
+     * does NOT — `GET /subscriptions/{id}` returns no `setup_order_*` fields in api-version
+     * 2026-04-20 (verified against sandbox). The order id lives on the subscription's current billing
+     * cycle instead, so this reads the subscription for its `current_cycle_id`, the cycle for its
+     * `order_id` ({@see currentCycle()}), then the order — returning the neutral Payment whose
+     * `clientSecret` is that token (see OrderResponse::toSetupPayment()). Null when there is no such
+     * local subscription, or the plan has no setup order (a pure trial — the cycle carries no
+     * `order_id`).
+     *
+     * Gated on the subscription still being `pending`: paying the setup order flips it to `active`,
+     * so `pending` is exactly "the setup payment is still outstanding". Reading the subscription
+     * state rather than the order state also keeps a *later* cycle's renewal order — auto-charged
+     * off the saved method, carrying no widget token — from being mistaken for a setup payment.
+     *
+     * A read answers absence with null, but a gateway failure still throws (CashierException), as
+     * the contract requires — so a transient cycle-read error is not reported as "nothing
+     * outstanding", the way Cashier's latestPayment() and support's findInvoice() also distinguish
+     * absence from failure.
      */
     public function subscriptionLatestPayment(Model $billable, string $type = 'default'): ?Payment
     {
@@ -349,12 +362,31 @@ trait ManagesRevolutSubscriptions
         }
 
         return $this->guardConnection(function () use ($id): ?Payment {
-            $setupOrderId = SubscriptionResponse::from(
+            $subscription = SubscriptionResponse::from(
                 $this->revolut()->get("/subscriptions/{$id}")->json() ?? [],
-            )->setupOrderId;
+            );
 
-            return $setupOrderId !== null
-                ? $this->retrieveOrder($setupOrderId)->toSetupPayment()
+            // Only a pending subscription has an outstanding setup order to complete.
+            if ($subscription->subscriptionState() !== RevolutSubscriptionState::Pending) {
+                return null;
+            }
+
+            $cycleId = $subscription->currentCycleId;
+
+            if ($cycleId === null || $cycleId === '') {
+                return null;
+            }
+
+            // Read the cycle directly, NOT via currentCycle() — that helper swallows a failed read
+            // to null for the swap/cancel enrichment path, where a committed 204 must not look like
+            // a failed write. Here the cycle read IS the operation, so a gateway failure must
+            // propagate through the outer guardConnection rather than read as "nothing outstanding".
+            $orderId = CycleResponse::from(
+                $this->revolut()->get("/subscriptions/{$id}/cycles/{$cycleId}")->json() ?? [],
+            )->orderId;
+
+            return $orderId !== null && $orderId !== ''
+                ? $this->retrieveOrder($orderId)->toSetupPayment()
                 : null;
         });
     }
