@@ -400,7 +400,12 @@ trait ManagesRevolutSubscriptions
      */
     private function cancelAndRefetch(string $id, string $type, ?CarbonImmutable $endsAt = null, ?CycleResponse $cycle = null): Subscription
     {
-        $this->revolut()->post("/subscriptions/{$id}/cancel");
+        // The cancel endpoint takes no body, but the connector sends Content-Type: application/json
+        // on every request — and an empty body under that header makes Revolut answer
+        // 400 "Could not parse JSON" (verified against the sandbox), not the documented 204. An
+        // explicit empty JSON object is what the endpoint accepts. The fake suite never caught this
+        // because its `/cancel` stub returns 204 regardless of the body sent.
+        $this->revolut()->withBody('{}', 'application/json')->post("/subscriptions/{$id}/cancel");
 
         return SubscriptionResponse::from(
             $this->revolut()->get("/subscriptions/{$id}")->json() ?? [],
