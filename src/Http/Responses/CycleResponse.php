@@ -13,7 +13,10 @@ use Spatie\LaravelData\Mappers\SnakeCaseMapper;
 
 /**
  * A subscription billing cycle (OpenAPI Subscription-Cycle): the active
- * cycle's end_date is the customer's paid-through timestamp.
+ * cycle's end_date is the customer's paid-through timestamp, and its order_id
+ * names the order that bills the cycle — for the first cycle, the setup order
+ * whose token completes a pending subscription (the retrieve response does not
+ * carry that id in api-version 2026-04-20; the cycle does).
  *
  * @internal The shape of a Revolut response, which is Revolut's to change and not ours to freeze — a new API version may add, rename or drop fields within a minor release. Reached only through RevolutGateway. Not public surface: outside the backward-compatibility promise in README.
  */
@@ -27,5 +30,6 @@ class CycleResponse extends Data
         public ?CarbonImmutable $startDate = null,
         #[WithCast(DateTimeInterfaceCast::class, format: RevolutDateFormats::FORMATS)]
         public ?CarbonImmutable $endDate = null,
+        public ?string $orderId = null,
     ) {}
 }

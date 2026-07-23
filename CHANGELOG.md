@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- **`subscriptionLatestPayment()` returned `null` for every pending subscription (Checkout Widget
+  flow broken).** It read the setup order id off the subscription retrieve response, but
+  `GET /subscriptions/{id}` carries no `setup_order_*` fields in api-version 2026-04-20 — only
+  `POST /subscriptions` does (verified against the sandbox). The id now comes from the subscription's
+  current billing cycle (`GET /subscriptions/{id}/cycles/{cycle_id}` → `order_id`); the payment is
+  returned only while the subscription is still `pending` (paying it flips it to `active`), which
+  also keeps a later cycle's tokenless renewal order off the setup-payment path. A failed cycle read
+  throws `CashierException` rather than being read as "nothing outstanding". No public surface changed.
 
 ## [1.2.0] - 2026-07-23
 
