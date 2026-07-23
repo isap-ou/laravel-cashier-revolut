@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   above; `retrieveOrder()` is now a `protected` internal `GET /orders/{id}` helper, off the public
   gateway surface. The widget token reaches an app only through the neutral `Payment`, never a raw
   driver response.
+- Bumped the `isapp/laravel-cashier-support` requirement to `^1.3` — `subscriptionLatestPayment()`
+  is a 1.3.0 contract, so an older support cannot satisfy the driver.
 
 ## [1.1.0] - 2026-07-20
 
